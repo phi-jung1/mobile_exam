@@ -9,11 +9,15 @@ import 'screens/results_screen.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'services/api_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
   await Hive.openBox('examBox');
+
+  // ✅ Initialize authentication token from storage
+  await ApiService.initializeAuth();
 
   // ✅ Run auto-sync at app startup
   await autoSyncPendingExams();
@@ -70,10 +74,12 @@ class MyApp extends StatelessWidget {
           final studentId = args?['studentId'] as String? ?? '';
           final subject = args?['subject'] as String? ?? '';
           final examId = args?['examId'] as String? ?? '';
+          final assignmentId = args?['assignmentId'] as String?;
           return ExamScreen(
             studentId: studentId,
             subject: subject,
             examId: examId,
+            assignmentId: assignmentId,
           );
         },
         '/results': (context) {

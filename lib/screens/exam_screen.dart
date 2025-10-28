@@ -6,9 +6,8 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_windowmanager/flutter_windowmanager.dart';
 import 'package:http/http.dart' as http;
+import '../services/api_service.dart';
 import 'student_dashboard.dart';
-import 'otp_screen.dart';
-import 'package:mo_be/screens/results_screen.dart';
 
 
 /// 🌟 Fade navigation helper
@@ -30,12 +29,14 @@ class ExamScreen extends StatefulWidget {
   final String studentId;
   final String subject;
   final String examId;
+  final String? assignmentId; // Optional - falls back to examId
 
   const ExamScreen({
     super.key,
     required this.studentId,
     required this.subject,
     required this.examId,
+    this.assignmentId,
   });
 
   @override
@@ -50,144 +51,10 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
   final ScrollController _questionScrollController = ScrollController();
   final Map<String, FocusNode> _focusNodes = {};
 
-  final List<Map<String, dynamic>> questions = [
-      // 🧠 Multiple Choice Questions (10)
-    {
-      'id': 'q1',
-      'type': 'mcq',
-      'question': 'What is the capital of the Philippines?',
-      'choices': ['Manila', 'Baguio City', 'Cebu', 'Davao'],
-      'correct': 'Manila',
-      'marks': 1,
-    },
-    {
-      'id': 'q2',
-      'type': 'mcq',
-      'question': 'Which planet is known as the Red Planet?',
-      'choices': ['Earth', 'Mars', 'Jupiter', 'Venus'],
-      'correct': 'Mars',
-      'marks': 1,
-    },
-    {
-      'id': 'q3',
-      'type': 'mcq',
-      'question': 'Which language is primarily used for Flutter development?',
-      'choices': ['Dart', 'Java', 'Python', 'C#'],
-      'correct': 'Dart',
-      'marks': 1,
-    },
-    {
-      'id': 'q4',
-      'type': 'mcq',
-      'question': 'What is the largest ocean on Earth?',
-      'choices': ['Atlantic', 'Indian', 'Pacific', 'Arctic'],
-      'correct': 'Pacific',
-      'marks': 1,
-    },
-    {
-      'id': 'q5',
-      'type': 'mcq',
-      'question': 'Which of the following is a web browser?',
-      'choices': ['Chrome', 'Windows', 'Linux', 'Python'],
-      'correct': 'Chrome',
-      'marks': 1,
-    },
-    {
-      'id': 'q6',
-      'type': 'mcq',
-      'question': 'Which of these is not a programming language?',
-      'choices': ['Java', 'HTML', 'Python', 'C++'],
-      'correct': 'HTML',
-      'marks': 1,
-    },
-    {
-      'id': 'q7',
-      'type': 'mcq',
-      'question': 'Who developed the theory of relativity?',
-      'choices': ['Isaac Newton', 'Albert Einstein', 'Nikola Tesla', 'Galileo Galilei'],
-      'correct': 'Albert Einstein',
-      'marks': 1,
-    },
-    {
-      'id': 'q8',
-      'type': 'mcq',
-      'question': 'What year did World War II end?',
-      'choices': ['1945', '1939', '1918', '1950'],
-      'correct': '1945',
-      'marks': 1,
-    },
-    {
-      'id': 'q9',
-      'type': 'mcq',
-      'question': 'Which data structure works on FIFO principle?',
-      'choices': ['Stack', 'Queue', 'Array', 'Tree'],
-      'correct': 'Queue',
-      'marks': 1,
-    },
-    {
-      'id': 'q10',
-      'type': 'mcq',
-      'question': 'What does CPU stand for?',
-      'choices': ['Central Processing Unit', 'Computer Personal Unit', 'Central Peripheral Unit', 'Control Processing Unit'],
-      'correct': 'Central Processing Unit',
-      'marks': 1,
-    },
-
-    // ✏️ Identification (5)
-    {
-      'id': 'q11',
-      'type': 'identification',
-      'question': 'What is the smallest prime number?',
-      'correct': '2',
-      'marks': 1,
-    },
-    {
-      'id': 'q12',
-      'type': 'identification',
-      'question': 'Who is known as the “Father of Computers”?',
-      'correct': 'Charles Babbage',
-      'marks': 1,
-    },
-    {
-      'id': 'q13',
-      'type': 'identification',
-      'question': 'What do you call the device used to input text into a computer?',
-      'correct': 'Keyboard',
-      'marks': 1,
-    },
-    {
-      'id': 'q14',
-      'type': 'identification',
-      'question': 'What programming language is used to design web pages along with CSS?',
-      'correct': 'HTML',
-      'marks': 1,
-    },
-    {
-      'id': 'q15',
-      'type': 'identification',
-      'question': 'What unit is used to measure computer memory?',
-      'correct': 'Byte',
-      'marks': 1,
-    },
-
-    // 🧮 Enumeration
-    {
-      'id': 'q16',
-      'type': 'enumeration',
-      'question': 'List at least 3 programming languages.',
-      'correct': 'C#, C++, Python',
-      'marks': 2,
-    },
-
-    // 📝 Essay
-    {
-      'id': 'q17',
-      'type': 'essay',
-      'question': 'Explain why data privacy is important in 3-5 sentences.',
-      'correct': 'Data privacy is important because it protects sensitive information and builds user trust.',
-      'marks': 5,
-    },
-  ];
+  // Questions will be loaded from API
+  List<Map<String, dynamic>> questions = [];
+  bool isLoadingQuestions = true;
+  String? loadError;
 
   Map<String, dynamic> studentAnswers = {};
   Set<String> flaggedQuestions = {};
@@ -202,14 +69,14 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
   int _currentQuestionIndex = 0;
   int _lastHandledBackgroundCount = 0; 
 
-  static const int examDurationSeconds = 60 * 30;
+  // Exam attempt tracking
+  int? attemptId;
+  DateTime? attemptStartTime;
+  int? examAssignmentId;
+  int? examDurationSeconds; // Will be set from API
+
   Timer? _timer;
-  int _remainingSeconds = examDurationSeconds;
-
-  Timer? _autoSyncTimer;
-  static const int autoSyncIntervalSeconds = 15;
-
-  late String attemptId;
+  int _remainingSeconds = 0; // Will be set when exam duration is known
 
   @override
   void initState() {
@@ -222,24 +89,129 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
 
     _secureExamEnvironment();
     
+    // Load questions from API
+    _loadExamQuestions();
 
-    for (var q in questions) {
-    if (q['type'] == 'mcq') q['choices'] = List<String>.from(q['choices'])..shuffle();
-    // Initialize FocusNode for text fields
-    if (q['type'] == 'identification' || q['type'] == 'enumeration' || q['type'] == 'essay') {
-      _focusNodes[q['id']] = FocusNode();
-      _focusNodes[q['id']]!.addListener(() {
-        if (_focusNodes[q['id']]!.hasFocus) {
-          // Scroll to the question when focused
-          _scrollToCurrentQuestion();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkForUnfinishedExam());
+  }
+
+  /// Load exam questions from API
+  Future<void> _loadExamQuestions() async {
+    try {
+      debugPrint('📚 Loading questions for exam: ${widget.examId}');
+      
+      // TEMPORARILY SKIP CACHE - force fresh fetch from API
+      debugPrint('⚠️ Skipping cache, forcing fresh API fetch...');
+      
+      // Try to load from cache first
+      // final cachedQuestions = examBox.get('questions_${widget.examId}');
+      // if (cachedQuestions != null && cachedQuestions is List) {
+      //   setState(() {
+      //     questions = List<Map<String, dynamic>>.from(cachedQuestions);
+      //     isLoadingQuestions = false;
+      //   });
+      //   debugPrint('✅ Loaded ${questions.length} questions from cache');
+      //   _initializeQuestions();
+      //   return;
+      // }
+
+      debugPrint('🌐 Fetching from API...');
+      debugPrint('   Exam ID: ${widget.examId}');
+      
+      // Fetch from API
+      final examData = await ApiService.fetchExamDetails(
+        examId: int.parse(widget.examId),
+      );
+
+      debugPrint('📦 Received exam data: ${examData != null ? "yes" : "no"}');
+      if (examData != null) {
+        debugPrint('   Keys: ${examData.keys.toList()}');
+        if (examData['exam'] != null) {
+          debugPrint('   Exam keys: ${examData['exam'].keys.toList()}');
         }
+      }
+      
+      if (examData != null && examData['exam'] != null) {
+        debugPrint('🔄 Parsing questions...');
+        
+        // Extract exam duration (in minutes from API, convert to seconds)
+        final examInfo = examData['exam'];
+        if (examInfo['duration'] != null) {
+          examDurationSeconds = (examInfo['duration'] as num).toInt() * 60;
+          _remainingSeconds = examDurationSeconds!;
+          debugPrint('⏱️ Exam duration: ${examInfo['duration']} minutes ($examDurationSeconds seconds)');
+        } else if (examInfo['duration_seconds'] != null) {
+          examDurationSeconds = (examInfo['duration_seconds'] as num).toInt();
+          _remainingSeconds = examDurationSeconds!;
+          debugPrint('⏱️ Exam duration: $examDurationSeconds seconds');
+        } else {
+          // Fallback to 30 minutes if duration not provided
+          examDurationSeconds = 60 * 30;
+          _remainingSeconds = examDurationSeconds!;
+          debugPrint('⚠️ No duration in exam data, using default: 30 minutes');
+        }
+        
+        final parsedQuestions = ApiService.parseQuestionsForApp(examData);
+        
+        debugPrint('✅ Parsed ${parsedQuestions.length} questions');
+        
+        setState(() {
+          questions = parsedQuestions;
+          isLoadingQuestions = false;
+        });
+
+        // Cache questions
+        await examBox.put('questions_${widget.examId}', questions);
+        
+        debugPrint('✅ Loaded ${questions.length} questions from API');
+        _initializeQuestions();
+      } else {
+        setState(() {
+          loadError = 'Failed to load exam questions - no data received';
+          isLoadingQuestions = false;
+        });
+        debugPrint('❌ Failed to fetch exam details');
+      }
+    } catch (e, stackTrace) {
+      debugPrint('⚠️ Error loading questions: $e');
+      debugPrint('📍 Stack trace: $stackTrace');
+      setState(() {
+        loadError = 'Error loading questions: ${e.toString()}';
+        isLoadingQuestions = false;
       });
     }
   }
-  questions.shuffle();
 
-  WidgetsBinding.instance.addPostFrameCallback((_) => _checkForUnfinishedExam());
-}
+  /// Initialize questions after loading (shuffle, create focus nodes)
+  void _initializeQuestions() {
+    debugPrint('🔧 Initializing ${questions.length} questions');
+    
+    for (var q in questions) {
+      // Debug log each question
+      debugPrint('  Q[${q['id']}]: type=${q['type']}, choices=${q['choices']?.length ?? 0}, marks=${q['marks']}');
+      
+      // Shuffle MCQ choices (preserving key-value pairs)
+      if (q['type'] == 'mcq' && q['choices'] != null) {
+        q['choices'] = List<Map<String, String>>.from(q['choices'])..shuffle();
+        debugPrint('    ✓ Shuffled ${q['choices'].length} choices');
+      }
+      
+      // Initialize FocusNode for text fields
+      if (q['type'] == 'identification' || q['type'] == 'enumeration' || q['type'] == 'essay') {
+        _focusNodes[q['id']] = FocusNode();
+        _focusNodes[q['id']]!.addListener(() {
+          if (_focusNodes[q['id']]!.hasFocus) {
+            _scrollToCurrentQuestion();
+          }
+        });
+        debugPrint('    ✓ Created focus node for text input');
+      }
+    }
+    
+    // Shuffle questions
+    questions.shuffle();
+    debugPrint('✅ Questions initialized and shuffled');
+  }
 
   Future<void> _secureExamEnvironment() async {
     try {
@@ -252,20 +224,22 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
   }
   
 
-  void _startAutoSync() {
-    _autoSyncTimer?.cancel();
-    _autoSyncTimer = Timer.periodic(
-      const Duration(seconds: autoSyncIntervalSeconds),
-      (timer) async {
-        if (!submitted && studentAnswers.isNotEmpty) {
-          await _syncToServer();
-        }
-      },
-    );
-  }
+  // Auto-sync removed - API only supports final submission
+  // void _startAutoSync() {
+  //   _autoSyncTimer?.cancel();
+  //   _autoSyncTimer = Timer.periodic(
+  //     const Duration(seconds: autoSyncIntervalSeconds),
+  //     (timer) async {
+  //       if (!submitted && studentAnswers.isNotEmpty) {
+  //         await _syncToServer();
+  //       }
+  //     },
+  //   );
+  // }
 
   
 
+  // Legacy sync method - no longer used with new API
   Future<bool> _syncToServer() async {
   final attemptKey = 'attempt_${widget.examId}_${widget.studentId}';
   final metaKey = 'meta_${widget.examId}_${widget.studentId}';
@@ -566,37 +540,132 @@ void _showWarningDialog(String message) {
     ),
   );
 }
-
-
-
-
-  String generateAttemptId() {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    return 'exam_${widget.examId}_${widget.studentId}_$timestamp';
+  /// Start exam attempt on the server
+  Future<void> _startExamAttempt() async {
+    try {
+      debugPrint('🚀 Starting exam attempt for exam ${widget.examId}...');
+      
+      // Use assignmentId if provided, otherwise fall back to examId
+      final assignmentIdStr = widget.assignmentId ?? widget.examId;
+      final assignmentId = int.tryParse(assignmentIdStr);
+      
+      if (assignmentId == null) {
+        debugPrint('❌ Invalid assignment ID: $assignmentIdStr');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Error: Invalid exam assignment ID')),
+          );
+        }
+        return;
+      }
+      
+      debugPrint('   Using assignment ID: $assignmentId');
+      
+      final result = await ApiService.startExamAttempt(
+        examAssignmentId: assignmentId,
+      );
+      
+      debugPrint('📥 API Response: $result');
+      
+      if (result == null) {
+        debugPrint('❌ Failed to start attempt - no response');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to start exam - no response from server')),
+          );
+        }
+        return;
+      }
+      
+      if (result['error'] != null) {
+        debugPrint('❌ Error: ${result['error']}');
+        // Show error to user
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: ${result['error']}')),
+          );
+        }
+        return;
+      }
+      
+      // Extract attempt data
+      debugPrint('🔍 Checking for attempt data...');
+      if (result['attempt'] != null) {
+        debugPrint('   ✓ Found attempt object');
+        attemptId = result['attempt']['attempt_id'];
+        final startTimeStr = result['attempt']['start_time'];
+        attemptStartTime = DateTime.parse(startTimeStr);
+        
+        debugPrint('✅ Attempt started:');
+        debugPrint('   Attempt ID: $attemptId');
+        debugPrint('   Start time: $attemptStartTime');
+        debugPrint('   Message: ${result['message']}');
+        
+        // Save attempt info
+        saveLocalData();
+      } else {
+        debugPrint('❌ No attempt object in response');
+        debugPrint('   Response keys: ${result.keys.toList()}');
+      }
+    } catch (e, stackTrace) {
+      debugPrint('⚠️ Error starting exam attempt: $e');
+      debugPrint('   Stack: $stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error starting exam: $e')),
+        );
+      }
+    }
   }
 
-  void _checkForUnfinishedExam() {
-  String resumeKey = '${widget.examId}_${widget.studentId}';
-  final savedRef = examBox.get(resumeKey);
+  void _checkForUnfinishedExam() async {
+    String resumeKey = '${widget.examId}_${widget.studentId}';
+    final savedRef = examBox.get(resumeKey);
 
-  
-  if (savedRef != null) {
-    final savedAttemptId = savedRef['attemptId'];
-    attemptId = savedRef['attemptId'] ?? generateAttemptId();
-    final savedSubmitted = savedRef['submitted'] is bool ? savedRef['submitted'] : false;
+    if (savedRef != null) {
+      final savedAttemptId = savedRef['attemptId'];
+      final savedSubmitted = savedRef['submitted'] is bool ? savedRef['submitted'] : false;
 
-    if (!savedSubmitted) {
-      attemptId = savedAttemptId ?? generateAttemptId();
-      _showResumeDialog();
+      if (!savedSubmitted && savedAttemptId != null) {
+        attemptId = savedAttemptId;
+        final savedStartTime = savedRef['attemptStartTime'];
+        if (savedStartTime != null) {
+          attemptStartTime = DateTime.parse(savedStartTime);
+        }
+        _showResumeDialog();
+        return;
+      }
+    }
+
+    // Start new attempt on server
+    await _startExamAttempt();
+    
+    // Check if attempt was created successfully
+    if (attemptId == null) {
+      debugPrint('❌ Failed to create exam attempt - attempt ID is still null');
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Error'),
+            content: const Text('Failed to start exam attempt. Please check your connection and try again.'),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.pop(context); // Go back to dashboard
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
       return;
     }
-  } else {
-    attemptId = generateAttemptId();
-    saveLocalData();
+    
+    _startExamNormally();
   }
-
-  _startExamNormally();
-}
 
   void _showResumeDialog() {
     if (!mounted) return;
@@ -610,18 +679,20 @@ void _showWarningDialog(String message) {
               "An unfinished exam was found. Would you like to resume your previous attempt or start fresh?"),
           actions: [
             TextButton(
-              onPressed: () {
+              onPressed: () async {
                 // Start fresh attempt
-                attemptId = generateAttemptId();
                 if (!mounted) return;
                 Navigator.pop(context);
+                
                 // Reset local data
                 studentAnswers.clear();
                 flaggedQuestions.clear();
-                _remainingSeconds = examDurationSeconds;
+                _remainingSeconds = examDurationSeconds ?? (60 * 30); // Fallback to 30 min
                 submitted = false;
                 flaggedSuspicious = false;
 
+                // Start new attempt on server
+                await _startExamAttempt();
                 saveLocalData();
                 _startExamNormally();
               },
@@ -636,7 +707,7 @@ void _showWarningDialog(String message) {
                 // Use stored attemptId to load correct answers and state
                 loadLocalData();
                 startTimer();
-                _startAutoSync();
+                // Auto-sync removed - only final submission supported
               },
             child: const Text("Resume"),
           ),
@@ -650,7 +721,7 @@ void _showWarningDialog(String message) {
   void _startExamNormally() {
     loadLocalData();
     startTimer();
-    _startAutoSync();
+    // Auto-sync removed - only final submission supported
   }
 
   void loadLocalData() {
@@ -678,8 +749,15 @@ void _showWarningDialog(String message) {
 
 
   void saveLocalData() {
+    // Don't save if we don't have an attempt ID yet
+    if (attemptId == null) {
+      debugPrint('⚠️ Cannot save local data - no attempt ID yet');
+      return;
+    }
+    
     examBox.put(attemptId, {
       'attemptId': attemptId,
+      'attemptStartTime': attemptStartTime?.toIso8601String(),
       'recordType': 'attempt',
       'answers': studentAnswers,
       'flaggedQuestions': flaggedQuestions.toList(),
@@ -693,6 +771,7 @@ void _showWarningDialog(String message) {
     // Save quick reference for resume check
     examBox.put('${widget.examId}_${widget.studentId}', {
       'attemptId': attemptId,
+      'attemptStartTime': attemptStartTime?.toIso8601String(),
       'submitted': submitted,
     });
   }
@@ -796,111 +875,183 @@ void _showWarningDialog(String message) {
   }
 
   Future<void> submitExam({bool autoSubmitted = false}) async {
-  if (!mounted) return;
-  setState(() => syncing = true);
-
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    barrierColor: Colors.black54,
-    builder: (_) => const Center(child: CircularProgressIndicator()),
-  );
-
-  bool synced = await _syncToServer();
-  await markExamCompleted(widget.examId, studentAnswers);
-
-  num totalMarks = 0;
-  num correctMarks = 0;
-
-  for (var q in questions) {
-    totalMarks += (q['marks'] ?? 1).toInt();
-    final correctAnswer = q['correct']?.toString().trim().toLowerCase();
-    final studentAnswer = studentAnswers[q['id']]?.toString().trim().toLowerCase();
-    if (q['type'] == 'mcq' || q['type'] == 'true_false' || q['type'] == 'identification') {
-      if (studentAnswer == correctAnswer) correctMarks += (q['marks'] ?? 1).toInt();
+    if (!mounted) return;
+    
+    // Check if we have attempt ID
+    if (attemptId == null) {
+      debugPrint('❌ Cannot submit - no attempt ID');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error: No active exam attempt')),
+      );
+      return;
     }
-  }
+    
+    setState(() => syncing = true);
 
-  final scorePercentage = (totalMarks > 0) ? (correctMarks / totalMarks) * 100 : 0;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black54,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
 
-  final attemptKey = 'attempt_${widget.examId}_${widget.studentId}';
-  final metaKey = 'meta_${widget.examId}_${widget.studentId}';
-  final existingMeta = examBox.get(metaKey) as Map? ?? {};
+    try {
+      // Calculate duration taken in seconds
+      int durationTakenSeconds;
+      if (attemptStartTime != null) {
+        final now = DateTime.now();
+        durationTakenSeconds = now.difference(attemptStartTime!).inSeconds;
+      } else {
+        // Fallback: use exam duration - remaining time
+        durationTakenSeconds = (examDurationSeconds ?? (60 * 30)) - _remainingSeconds;
+      }
+      
+      debugPrint('⏱️ Duration taken: $durationTakenSeconds seconds');
 
-  await examBox.put(attemptKey, {
-    'attemptId': attemptId,
-    'examId': widget.examId,
-    'studentId': widget.studentId,
-    'subject': widget.subject,
-    'answers': studentAnswers,
-    'flaggedQuestions': flaggedQuestions.toList(),
-    'submitted': true,
-    'completed': true,
-    'flagged': flaggedSuspicious,
-    'synced': synced,
-    'score': scorePercentage,
-    'totalMarks': totalMarks,
-    'correctMarks': correctMarks,
-    'completedAt': DateTime.now().toIso8601String(),
-    'questions': questions,
-    'recordType': 'attempt',
-  });
+      // Format answers according to API spec
+      final formattedAnswers = studentAnswers.entries.map((entry) {
+        final questionId = entry.key;
+        final answer = entry.value;
+        
+        // Find the original item_id from the question
+        final question = questions.firstWhere(
+          (q) => q['id'] == questionId,
+          orElse: () => {},
+        );
+        
+        final itemId = question['itemId'];
+        final questionType = question['type'];
+        
+        if (itemId == null) {
+          debugPrint('⚠️ No item_id found for question $questionId');
+          return null;
+        }
+        
+        // Format answer based on type
+        String formattedAnswer;
+        if (questionType == 'mcq' && answer is List) {
+          // Multiple selections: join with commas
+          formattedAnswer = answer.join(',');
+          debugPrint('   MCQ answer: $formattedAnswer (${answer.length} selections)');
+        } else {
+          formattedAnswer = answer.toString();
+        }
+        
+        return {
+          'item_id': itemId,
+          'answer': formattedAnswer,
+        };
+      }).where((a) => a != null).cast<Map<String, dynamic>>().toList();
+      
+      debugPrint('📤 Submitting ${formattedAnswers.length} answers...');
 
-  await examBox.put(metaKey, {
-    ...existingMeta,
-    'id': widget.examId,
-    'studentId': widget.studentId,
-    'subject': widget.subject,
-    'submitted': true,
-    'available': false,
-    'completed': true,
-    'allowReview': existingMeta['allowReview'] ?? false,
-    'score': correctMarks,
-    'totalMarks': totalMarks,
-    'studentAnswers': studentAnswers,
-    'questions': questions,
-    'resultsReleased': true,
-    'synced': synced || (existingMeta['synced'] == true),
-    'recordType': 'exam',
-    'completedAt': DateTime.now().toIso8601String(),
-  });
+      // Submit to server
+      final result = await ApiService.submitExamAttempt(
+        attemptId: attemptId!,
+        durationTakenSeconds: durationTakenSeconds,
+        answers: formattedAnswers,
+      );
 
-  setState(() {
-    syncing = false;
-    submitted = true;
-  });
+      if (result == null || result['error'] != null) {
+        final errorMsg = result?['error'] ?? 'Failed to submit exam';
+        debugPrint('❌ Submission error: $errorMsg');
+        
+        if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Submission failed: $errorMsg')),
+          );
+        }
+        
+        setState(() => syncing = false);
+        return;
+      }
 
-  if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      // Extract score from response
+      final attemptData = result['attempt'];
+      final score = attemptData?['score'] ?? 0;
+      
+      debugPrint('✅ Exam submitted successfully - Score: $score');
 
-  if (!mounted) return;
+      bool synced = true; // Already synced via API
+      await markExamCompleted(widget.examId, studentAnswers);
 
-  final allowReview = (examBox.get(metaKey)?['allowReview'] ?? false) as bool;
+      final attemptKey = 'attempt_${widget.examId}_${widget.studentId}';
+      final metaKey = 'meta_${widget.examId}_${widget.studentId}';
+      final existingMeta = examBox.get(metaKey) as Map? ?? {};
 
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => AlertDialog(
-      title: Text(autoSubmitted ? "Exam Auto-Submitted" : "Exam Submitted"),
-      content: Text(autoSubmitted
-          ? "The exam was auto-submitted after multiple exits."
-          : "Your exam has been successfully submitted."),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.pop(context);
-            if (allowReview) {
-              navigateWithFade(
-                context,
-                ReviewScreen(
-                  duration: const Duration(minutes: 1),
-                  studentAnswers: studentAnswers,
-                  flaggedQuestions: flaggedQuestions,
-                  questions: questions,
-                  flagged: flaggedSuspicious,
-                  studentId: widget.studentId,
-                ),
-              );
-            } else {
+      await examBox.put(attemptKey, {
+        'attemptId': attemptId,
+        'examId': widget.examId,
+        'studentId': widget.studentId,
+        'subject': widget.subject,
+        'answers': studentAnswers,
+        'flaggedQuestions': flaggedQuestions.toList(),
+        'submitted': true,
+        'completed': true,
+        'flagged': flaggedSuspicious,
+        'synced': synced,
+        'score': score,
+        'completedAt': DateTime.now().toIso8601String(),
+        'questions': questions,
+        'recordType': 'attempt',
+      });
+
+      await examBox.put(metaKey, {
+        ...existingMeta,
+        'id': widget.examId,
+        'studentId': widget.studentId,
+        'subject': widget.subject,
+        'submitted': true,
+        'available': false,
+        'completed': true,
+        'allowReview': existingMeta['allowReview'] ?? false,
+        'score': score,
+        'studentAnswers': studentAnswers,
+        'questions': questions,
+        'resultsReleased': true,
+        'synced': synced,
+        'recordType': 'exam',
+        'completedAt': DateTime.now().toIso8601String(),
+      });
+
+      setState(() {
+        syncing = false;
+        submitted = true;
+      });
+
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+
+      if (!mounted) return;
+
+      final allowReview = (examBox.get(metaKey)?['allowReview'] ?? false) as bool;
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: Text(autoSubmitted ? "Exam Auto-Submitted" : "Exam Submitted"),
+          content: Text(autoSubmitted
+              ? "The exam was auto-submitted. Your score: $score"
+              : "Your exam has been successfully submitted. Score: $score"),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                if (allowReview) {
+                  navigateWithFade(
+                    context,
+                    ReviewScreen(
+                      duration: const Duration(minutes: 1),
+                      studentAnswers: studentAnswers,
+                      flaggedQuestions: flaggedQuestions,
+                      questions: questions,
+                      flagged: flaggedSuspicious,
+                      studentId: widget.studentId,
+                    ),
+                  );
+                } else {
               navigateWithFade(
                 context,
                 StudentDashboard(studentId: widget.studentId));
@@ -911,7 +1062,21 @@ void _showWarningDialog(String message) {
       ],
     ),
   );
-}
+    } catch (e, stackTrace) {
+      debugPrint('⚠️ Exception during exam submission: $e');
+      debugPrint('Stack: $stackTrace');
+      
+      setState(() => syncing = false);
+      
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error submitting exam: $e')),
+        );
+      }
+    }
+  }
 
 
   double getAnswerProgress() {
@@ -925,8 +1090,47 @@ void _showWarningDialog(String message) {
     return answeredCount / questions.length;
   }
 
+  /// Get display info for question type
+  Map<String, dynamic> getQuestionTypeInfo(String type, {String? originalType}) {
+    // Check original type for enum variations
+    if (originalType != null) {
+      switch (originalType.toLowerCase()) {
+        case 'enum_ordered':
+          return {
+            'label': 'Enumeration (Order Matters)',
+            'color': Colors.deepOrange,
+            'icon': Icons.format_list_numbered
+          };
+        case 'enum_unordered':
+          return {
+            'label': 'Enumeration (Any Order)',
+            'color': Colors.orange,
+            'icon': Icons.reorder
+          };
+      }
+    }
+    
+    // Fallback to converted type
+    switch (type.toLowerCase()) {
+      case 'mcq':
+        return {'label': 'Multiple Choice', 'color': Colors.blue, 'icon': Icons.list};
+      case 'true_false':
+        return {'label': 'True or False', 'color': Colors.purple, 'icon': Icons.check_circle_outline};
+      case 'identification':
+        return {'label': 'Identification', 'color': Colors.green, 'icon': Icons.edit};
+      case 'enumeration':
+        return {'label': 'Enumeration', 'color': Colors.orange, 'icon': Icons.format_list_numbered};
+      case 'essay':
+        return {'label': 'Essay', 'color': Colors.red, 'icon': Icons.article};
+      default:
+        return {'label': type.toUpperCase(), 'color': Colors.grey, 'icon': Icons.help_outline};
+    }
+  }
+
   Widget buildQuestion(Map<String, dynamic> q) {
   final isFlagged = flaggedQuestions.contains(q['id']);
+  final typeInfo = getQuestionTypeInfo(q['type'] ?? 'unknown', originalType: q['originalType']);
+  
   return Card(
     elevation: 3,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -936,6 +1140,31 @@ void _showWarningDialog(String message) {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Question type badge
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: typeInfo['color'].withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: typeInfo['color'], width: 1),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(typeInfo['icon'], size: 16, color: typeInfo['color']),
+                const SizedBox(width: 6),
+                Text(
+                  typeInfo['label'],
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: typeInfo['color'],
+                  ),
+                ),
+              ],
+            ),
+          ),
           Row(
             children: [
               Expanded(
@@ -963,44 +1192,134 @@ void _showWarningDialog(String message) {
             ],
           ),
           const SizedBox(height: 12),
-          if (q['type'] == 'mcq' || q['type'] == 'true_false')
-            ...q['choices'].map<Widget>((opt) {
-              return RadioListTile<String>(
-                title: Text(opt),
-                value: opt,
-                groupValue: studentAnswers[q['id']] as String?,
-                onChanged: submitted
-                    ? null
-                    : (String? value) {
-                        setState(() {
-                          studentAnswers[q['id']] = value;
-                        });
-                        saveLocalData();
-                        _saveExamProgress();
-                      },
-                activeColor: Colors.blueAccent,
-                contentPadding: EdgeInsets.zero,
-              );
-            }).toList(),
+          if (q['type'] == 'mcq')
+            if (q['choices'] != null && q['choices'] is List && q['choices'].isNotEmpty)
+              ...q['choices'].map<Widget>((opt) {
+                // opt is now a Map with 'key' and 'text'
+                final optKey = opt['key'] ?? '';
+                final optText = opt['text'] ?? '';
+                
+                // Get current selected answers as a list
+                final selectedAnswers = studentAnswers[q['id']] is List 
+                    ? List<String>.from(studentAnswers[q['id']])
+                    : (studentAnswers[q['id']] != null && studentAnswers[q['id']].toString().isNotEmpty)
+                        ? [studentAnswers[q['id']].toString()]
+                        : <String>[];
+                
+                final isSelected = selectedAnswers.contains(optKey);
+                
+                return CheckboxListTile(
+                  title: Text(optText),
+                  value: isSelected,
+                  onChanged: submitted
+                      ? null
+                      : (bool? checked) {
+                          setState(() {
+                            if (checked == true) {
+                              selectedAnswers.add(optKey);
+                            } else {
+                              selectedAnswers.remove(optKey);
+                            }
+                            studentAnswers[q['id']] = selectedAnswers.isEmpty ? null : selectedAnswers;
+                          });
+                          saveLocalData();
+                          _saveExamProgress();
+                        },
+                  activeColor: Colors.blueAccent,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                );
+              }).toList()
+            else
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  '⚠️ No answer choices available for this question',
+                  style: TextStyle(color: Colors.red, fontStyle: FontStyle.italic),
+                ),
+              ),
+          if (q['type'] == 'true_false')
+            if (q['choices'] != null && q['choices'] is List && q['choices'].isNotEmpty)
+              ...q['choices'].map<Widget>((opt) {
+                final optKey = opt['key'] ?? '';
+                final optText = opt['text'] ?? '';
+                
+                return RadioListTile<String>(
+                  title: Text(optText),
+                  value: optKey,
+                  groupValue: studentAnswers[q['id']] as String?,
+                  onChanged: submitted
+                      ? null
+                      : (String? value) {
+                          setState(() {
+                            studentAnswers[q['id']] = value;
+                          });
+                          saveLocalData();
+                          _saveExamProgress();
+                        },
+                  activeColor: Colors.blueAccent,
+                  contentPadding: EdgeInsets.zero,
+                );
+              }).toList()
+            else
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  '⚠️ No answer choices available for this question',
+                  style: TextStyle(color: Colors.red, fontStyle: FontStyle.italic),
+                ),
+              ),
           if (q['type'] == 'identification' ||
               q['type'] == 'enumeration' ||
               q['type'] == 'essay')
-            TextFormField(
-              focusNode: _focusNodes[q['id']],
-              initialValue: studentAnswers[q['id']],
-              enabled: !submitted,
-              maxLines: q['type'] == 'essay' ? null : 1,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                hintText: q['type'] == 'enumeration'
-                    ? 'List answers separated by commas'
-                    : 'Your answer...',
-              ),
-              onChanged: (val) {
-                studentAnswers[q['id']] = val;
-                saveLocalData();
-                _saveExamProgress();
-              },
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Add hint for ordered enumeration
+                if (q['originalType']?.toLowerCase() == 'enum_ordered')
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.deepOrange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.deepOrange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline, size: 18, color: Colors.deepOrange),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '⚠️ Order matters! List your answers in the correct sequence.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.deepOrange.shade900,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                TextFormField(
+                  focusNode: _focusNodes[q['id']],
+                  initialValue: studentAnswers[q['id']],
+                  enabled: !submitted,
+                  maxLines: q['type'] == 'essay' ? null : 1,
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    hintText: q['type'] == 'enumeration'
+                        ? 'List answers separated by commas'
+                        : 'Your answer...',
+                  ),
+                  onChanged: (val) {
+                    studentAnswers[q['id']] = val;
+                    saveLocalData();
+                    _saveExamProgress();
+                  },
+                ),
+              ],
             ),
         ],
       ),
@@ -1041,8 +1360,10 @@ void _showWarningDialog(String message) {
         scrollDirection: Axis.horizontal,
         itemCount: questions.length,
         itemBuilder: (context, index) {
-          final answered = studentAnswers[questions[index]['id']] != null &&
-              studentAnswers[questions[index]['id']].toString().isNotEmpty;
+          final answer = studentAnswers[questions[index]['id']];
+          final answered = answer != null && 
+              ((answer is List && answer.isNotEmpty) || 
+               (answer is! List && answer.toString().isNotEmpty));
           final flagged = flaggedQuestions.contains(questions[index]['id']);
           final isCurrent = _currentQuestionIndex == index;
 
@@ -1090,8 +1411,16 @@ void _showWarningDialog(String message) {
                 physics: const NeverScrollableScrollPhysics(),
                 itemBuilder: (context, index) {
                   final q = questions[index];
-                  final answer = studentAnswers[q['id']] ?? 'No answer';
+                  final answer = studentAnswers[q['id']];
                   final isFlagged = flaggedQuestions.contains(q['id']);
+                  
+                  // Handle multiple selections for MCQ
+                  final selectedAnswers = answer is List 
+                      ? List<String>.from(answer)
+                      : (answer != null && answer.toString().isNotEmpty)
+                          ? [answer.toString()]
+                          : <String>[];
+                  
                   return Card(
                     margin: const EdgeInsets.all(12),
                     child: Padding(
@@ -1112,24 +1441,60 @@ void _showWarningDialog(String message) {
                             ],
                           ),
                           const SizedBox(height: 12),
-                          if (q['type'] == 'mcq' || q['type'] == 'true_false')
-                            ...q['choices'].map((opt) {
-                              bool isSelected = opt == answer;
-                              return ListTile(
-                                title: Text(opt),
-                                leading: Radio(
-                                  value: opt,
-                                  groupValue: answer,
-                                  onChanged: null,
+                          if (q['type'] == 'mcq')
+                            if (q['choices'] != null && q['choices'] is List && q['choices'].isNotEmpty)
+                              ...q['choices'].map((opt) {
+                                final optKey = opt['key'] ?? '';
+                                final optText = opt['text'] ?? '';
+                                final isSelected = selectedAnswers.contains(optKey);
+                                
+                                return ListTile(
+                                  title: Text(optText),
+                                  leading: Checkbox(
+                                    value: isSelected,
+                                    onChanged: null,
+                                  ),
+                                  tileColor: isSelected ? Colors.green[100] : null,
+                                );
+                              }).toList()
+                            else
+                              Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Text(
+                                  '⚠️ No answer choices available',
+                                  style: TextStyle(color: Colors.red, fontStyle: FontStyle.italic),
                                 ),
-                                tileColor: isSelected ? Colors.green[100] : null,
-                              );
-                            }).toList(),
+                              ),
+                          if (q['type'] == 'true_false')
+                            if (q['choices'] != null && q['choices'] is List && q['choices'].isNotEmpty)
+                              ...q['choices'].map((opt) {
+                                final optKey = opt['key'] ?? '';
+                                final optText = opt['text'] ?? '';
+                                final isSelected = optKey == (answer?.toString() ?? '');
+                                
+                                return ListTile(
+                                  title: Text(optText),
+                                  leading: Radio(
+                                    value: optKey,
+                                    groupValue: answer?.toString(),
+                                    onChanged: null,
+                                  ),
+                                  tileColor: isSelected ? Colors.green[100] : null,
+                                );
+                              }).toList()
+                            else
+                              Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Text(
+                                  '⚠️ No answer choices available',
+                                  style: TextStyle(color: Colors.red, fontStyle: FontStyle.italic),
+                                ),
+                              ),
                           if (q['type'] == 'identification' ||
                               q['type'] == 'enumeration' ||
                               q['type'] == 'essay')
                             TextFormField(
-                              initialValue: answer,
+                              initialValue: answer?.toString() ?? 'No answer',
                               enabled: false,
                               maxLines: q['type'] == 'essay' ? null : 1,
                               decoration: const InputDecoration(
@@ -1233,6 +1598,85 @@ void _showWarningDialog(String message) {
 
   @override
   Widget build(BuildContext context) {
+    // Show loading screen while questions are being fetched
+    if (isLoadingQuestions) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text("${widget.subject} Exam"),
+        ),
+        body: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 20),
+              Text('Loading exam questions...', style: TextStyle(fontSize: 16)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Show error if questions failed to load
+    if (loadError != null) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text("${widget.subject} Exam"),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+              const SizedBox(height: 20),
+              Text('Failed to load exam', style: const TextStyle(fontSize: 18)),
+              const SizedBox(height: 10),
+              Text(loadError!, style: const TextStyle(color: Colors.grey)),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    isLoadingQuestions = true;
+                    loadError = null;
+                  });
+                  _loadExamQuestions();
+                },
+                child: const Text('Retry'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Go Back'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Show empty state if no questions
+    if (questions.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text("${widget.subject} Exam"),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.quiz_outlined, size: 64, color: Colors.grey),
+              const SizedBox(height: 20),
+              const Text('No questions available', style: TextStyle(fontSize: 18)),
+              const SizedBox(height: 20),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Go Back'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return WillPopScope(
       onWillPop: _onWillPop,
       child: Stack(

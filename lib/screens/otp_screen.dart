@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'results_screen.dart';
+import '../services/api_service.dart';
 
 class OTPScreen extends StatefulWidget {
   final String examId;
   final String subject;
-  final String? expectedOTP;
+  final String? expectedOTP;  // Deprecated - kept for backward compatibility
   final bool forResults;
   final String studentId;
   final VoidCallback? onVerified;
@@ -41,28 +42,98 @@ class _OTPScreenState extends State<OTPScreen>
   }
 
   Future<void> verifyOTP() async {
+    final enteredPassword = otpController.text.trim();
+
+    if (enteredPassword.isEmpty) {
+      setState(() {
+        isError = true;
+      });
+      _shakeController.forward(from: 0);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("❌ Please enter the exam password."),
+          backgroundColor: Colors.red.shade600,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
     setState(() {
       isVerifying = true;
       isError = false;
     });
 
-    await Future.delayed(const Duration(seconds: 1));
+    // Call API to verify password
+    debugPrint('🔐 Verifying password for exam ${widget.examId} with API...');
+    debugPrint('   📋 Exam ID (string): "${widget.examId}"');
+    debugPrint('   👤 Student ID (string): "${widget.studentId}"');
+    
+    // Parse IDs
+    int examIdInt;
+    int studentIdInt;
+    
+    try {
+      examIdInt = int.parse(widget.examId);
+      debugPrint('   ✅ Parsed exam ID: $examIdInt');
+    } catch (e) {
+      debugPrint('   ❌ Failed to parse exam ID "${widget.examId}": $e');
+      setState(() {
+        isError = true;
+        isVerifying = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("❌ Invalid exam ID: ${widget.examId}"),
+          backgroundColor: Colors.red.shade600,
+        ),
+      );
+      return;
+    }
+    
+    try {
+      studentIdInt = int.parse(widget.studentId);
+      debugPrint('   ✅ Parsed student ID: $studentIdInt');
+    } catch (e) {
+      debugPrint('   ❌ Failed to parse student ID "${widget.studentId}": $e');
+      setState(() {
+        isError = true;
+        isVerifying = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("❌ Invalid student ID: ${widget.studentId}"),
+          backgroundColor: Colors.red.shade600,
+        ),
+      );
+      return;
+    }
+    
+    final verified = await ApiService.verifyExamPassword(
+      examId: examIdInt,
+      studentId: studentIdInt,
+      password: enteredPassword,
+    );
 
-    final enteredOTP = otpController.text.trim();
-    final expectedOTP = widget.expectedOTP ?? "";
+    if (!mounted) return;
 
-    if (expectedOTP.isEmpty || enteredOTP == expectedOTP) {
+    if (verified) {
+      // Password is correct
+      debugPrint('✅ Password verified successfully');
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(widget.forResults
-              ? "✅ OTP Verified! Loading Results..."
-              : "✅ OTP Verified! Starting Exam..."),
+              ? "✅ Password Verified! Loading Results..."
+              : "✅ Password Verified! Starting Exam..."),
           backgroundColor: Colors.green.shade600,
           behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 1),
         ),
       );
 
-      await Future.delayed(const Duration(milliseconds: 700));
+      await Future.delayed(const Duration(milliseconds: 500));
 
       if (!mounted) return;
 
@@ -80,18 +151,28 @@ class _OTPScreenState extends State<OTPScreen>
         widget.onVerified?.call();
       }
     } else {
-      setState(() => isError = true);
+      // Password is incorrect or verification failed
+      debugPrint('❌ Password verification failed');
+      
+      setState(() {
+        isError = true;
+        isVerifying = false;
+      });
       _shakeController.forward(from: 0);
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text("❌ Invalid OTP. Please try again."),
+          content: const Text("❌ Incorrect password. Please try again."),
           backgroundColor: Colors.red.shade600,
           behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
         ),
       );
     }
 
-    setState(() => isVerifying = false);
+    if (mounted && isVerifying) {
+      setState(() => isVerifying = false);
+    }
   }
 
   @override
@@ -104,11 +185,11 @@ class _OTPScreenState extends State<OTPScreen>
   @override
   Widget build(BuildContext context) {
     final title =
-        widget.forResults ? "Verify OTP to View Results" : "Verify OTP to Start Exam";
+        widget.forResults ? "Verify Password to View Results" : "Verify Password to Start Exam";
 
     final subtitle = widget.forResults
-        ? "Enter the OTP provided by your instructor to access your results."
-        : "Enter the OTP provided by your instructor to begin your exam.";
+        ? "Enter the exam password provided by your instructor to access your results."
+        : "Enter the exam password provided by your instructor to begin your exam.";
 
     return Scaffold(
       body: Container(
@@ -178,18 +259,18 @@ class _OTPScreenState extends State<OTPScreen>
                         },
                         child: TextField(
                           controller: otpController,
-                          keyboardType: TextInputType.number,
-                          maxLength: 6,
+                          keyboardType: TextInputType.text,
+                          obscureText: true,
                           textAlign: TextAlign.center,
                           style: const TextStyle(
-                            fontSize: 24,
-                            letterSpacing: 4,
+                            fontSize: 20,
+                            letterSpacing: 2,
                             fontWeight: FontWeight.bold,
                           ),
                           decoration: InputDecoration(
                             counterText: "",
-                            hintText: "••••••",
-                            hintStyle: TextStyle(color: Colors.grey.shade400),
+                            hintText: "Enter password",
+                            hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 16),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                               borderSide: BorderSide(
@@ -203,12 +284,37 @@ class _OTPScreenState extends State<OTPScreen>
                                       : Colors.grey.shade400,
                                   width: 1.5),
                             ),
-                            prefixIcon: const Icon(Icons.key_rounded),
+                            prefixIcon: const Icon(Icons.password_rounded),
                           ),
                         ),
                       ),
 
                       const SizedBox(height: 24),
+                      
+                      // Show verification progress
+                      if (isVerifying)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Column(
+                            children: [
+                              const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(strokeWidth: 3),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Verifying with server...',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey.shade600,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      
                       AnimatedContainer(
                         duration: const Duration(milliseconds: 300),
                         curve: Curves.easeInOut,

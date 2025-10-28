@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive/hive.dart';
+import 'dart:convert';
 import 'student_dashboard.dart';
+import '../services/api_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -75,15 +77,41 @@ class _LoginScreenState extends State<LoginScreen>
     }
 
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(seconds: 1));
 
-    if (password == "12345") {
+    // Call Laravel API login
+    final result = await ApiService.login(
+      login: id,
+      password: password,
+    );
+
+    setState(() => _isLoading = false);
+
+    if (result != null && result['token'] != null && result['user'] != null) {
+      // Login successful
+      final token = result['token'];
+      
+      // ✅ Set the authentication token for API requests
+      ApiService.setAuthToken(token);
+      debugPrint('✅ Auth token set: ${token.substring(0, 20)}...');
+      
       try {
         final box = await Hive.openBox('loginBox');
+        final user = result['user'];
+        
+        debugPrint('👤 User data from API:');
+        debugPrint('   id (database): ${user['id']}');
+        debugPrint('   id_number (login): ${user['id_number']}');
+        debugPrint('   first_name: ${user['first_name']}');
+        debugPrint('   last_name: ${user['last_name']}');
+        
+        // Save token to Hive for persistence
+        await box.put('authToken', token);
+        
         if (_rememberMe) {
           await box.put('studentId', id);
-          await box.put('password', password); // new
+          await box.put('password', password);
           await box.put('rememberMe', true);
+          await box.put('user', jsonEncode(user)); // Save user data
         } else {
           await box.delete('studentId');
           await box.delete('password');
@@ -92,28 +120,48 @@ class _LoginScreenState extends State<LoginScreen>
 
         if (!mounted) return;
 
+        final firstName = user['first_name'] ?? '';
+        final lastName = user['last_name'] ?? '';
+        final fullName = '$firstName $lastName'.trim();
+
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Welcome, $id!")),
+          SnackBar(content: Text("Welcome, ${fullName.isNotEmpty ? fullName : id}!")),
         );
+
+        // Get the database ID (not the login id_number)
+        final databaseId = user['id']?.toString();
+        
+        if (databaseId == null) {
+          debugPrint('⚠️ WARNING: No database ID found in user object!');
+          debugPrint('   This will cause issues with API calls.');
+          debugPrint('   User object: $user');
+        }
 
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => StudentDashboard(studentId: id)),
+          MaterialPageRoute(
+            builder: (_) => StudentDashboard(
+              studentId: databaseId ?? user['id_number'] ?? id,  // Prefer database ID
+              studentName: fullName.isNotEmpty ? fullName : null,  // Pass full name
+            ),
+          ),
         );
       } catch (e) {
         debugPrint("Hive save error: $e");
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to save login info.")),
+          const SnackBar(content: Text("Login successful but failed to save info.")),
         );
       }
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Invalid Student ID or Password")),
+        const SnackBar(
+          content: Text("Invalid credentials or account not active"),
+          backgroundColor: Colors.red,
+        ),
       );
     }
-
-    if (mounted) setState(() => _isLoading = false);
   }
 
 
@@ -267,9 +315,10 @@ class _LoginScreenState extends State<LoginScreen>
                         ),
                       ),
                       const SizedBox(height: 20),
-                      const Text(
-                        "Use any Student ID with password 12345",
+                      Text(
+                        "Login with your Student ID and Password",
                         style: TextStyle(fontSize: 12, color: Colors.grey),
+                        textAlign: TextAlign.center,
                       ),
                     ],
                   ),
