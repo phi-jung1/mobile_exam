@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive/hive.dart';
+import 'dart:convert';
+import 'dart:math';
 import 'student_dashboard.dart';
+import '../services/api_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -11,7 +14,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final TextEditingController _idController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
@@ -22,13 +25,21 @@ class _LoginScreenState extends State<LoginScreen>
   late Animation<Color?> _color1;
   late Animation<Color?> _color2;
 
+  // 🎞️ Logo animations
+  late AnimationController _logoController;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _rotationAnimation;
+  late Animation<double> _fadeAnimation;
+
   @override
   void initState() {
     super.initState();
     _setupAnimation();
+    _setupLogoAnimation();
     _initHive();
   }
 
+  // Background gradient animation
   void _setupAnimation() {
     _controller = AnimationController(
       duration: const Duration(seconds: 6),
@@ -46,17 +57,38 @@ class _LoginScreenState extends State<LoginScreen>
     ).animate(_controller);
   }
 
+  // 🎞️ Logo scaling, rotation, and fade-in animation
+  void _setupLogoAnimation() {
+    _logoController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    );
+
+    _scaleAnimation = Tween<double>(begin: 0.6, end: 1.0)
+        .animate(CurvedAnimation(parent: _logoController, curve: Curves.elasticOut));
+
+    _rotationAnimation = Tween<double>(begin: -pi / 4, end: 0)
+        .animate(CurvedAnimation(parent: _logoController, curve: Curves.easeOutBack));
+
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0)
+        .animate(CurvedAnimation(parent: _logoController, curve: Curves.easeIn));
+
+    _logoController.forward();
+  }
+
   Future<void> _initHive() async {
     try {
       final box = await Hive.openBox('loginBox');
       final savedId = box.get('studentId');
-      final savedPassword = box.get('password'); // new
+      final savedPassword = box.get('password');
       final remember = box.get('rememberMe', defaultValue: false);
 
       if (remember && savedId != null && savedId.toString().isNotEmpty) {
-        _idController.text = savedId.toString();
-        _passwordController.text = savedPassword?.toString() ?? ''; // auto-fill password
-        setState(() => _rememberMe = true);
+        setState(() {
+          _idController.text = savedId.toString();
+          _passwordController.text = savedPassword?.toString() ?? '';
+          _rememberMe = true;
+        });
       }
     } catch (e) {
       debugPrint("Hive initialization error: $e");
@@ -69,21 +101,51 @@ class _LoginScreenState extends State<LoginScreen>
 
     if (id.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please enter both ID and Password")),
+        const SnackBar(
+          content: Text("Please enter both Student ID and Password."),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
 
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(seconds: 1));
 
-    if (password == "12345") {
+    // Call Laravel API login
+    final result = await ApiService.login(
+      login: id,
+      password: password,
+    );
+
+    setState(() => _isLoading = false);
+
+    if (result != null && result['token'] != null && result['user'] != null) {
+      // Login successful
+      final token = result['token'];
+      
+      // ✅ Set the authentication token for API requests
+      ApiService.setAuthToken(token);
+      debugPrint('✅ Auth token set: ${token.substring(0, 20)}...');
+      
       try {
         final box = await Hive.openBox('loginBox');
+        final user = result['user'];
+        
+        debugPrint('👤 User data from API:');
+        debugPrint('   id (database): ${user['id']}');
+        debugPrint('   id_number (login): ${user['id_number']}');
+        debugPrint('   first_name: ${user['first_name']}');
+        debugPrint('   last_name: ${user['last_name']}');
+        
+        // Save token to Hive for persistence
+        await box.put('authToken', token);
+        
         if (_rememberMe) {
           await box.put('studentId', id);
-          await box.put('password', password); // new
+          await box.put('password', password);
           await box.put('rememberMe', true);
+          await box.put('user', jsonEncode(user)); // Save user data
         } else {
           await box.delete('studentId');
           await box.delete('password');
@@ -92,34 +154,75 @@ class _LoginScreenState extends State<LoginScreen>
 
         if (!mounted) return;
 
+        final firstName = user['first_name'] ?? '';
+        final lastName = user['last_name'] ?? '';
+        final fullName = '$firstName $lastName'.trim();
+
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Welcome, $id!")),
+          SnackBar(
+            content: Text("Welcome, ${fullName.isNotEmpty ? fullName : id}!"),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => StudentDashboard(studentId: id)),
-        );
+        // Get the database ID (not the login id_number)
+        final databaseId = user['id']?.toString();
+        
+        if (databaseId == null) {
+          debugPrint('⚠️ WARNING: No database ID found in user object!');
+          debugPrint('   This will cause issues with API calls.');
+          debugPrint('   User object: $user');
+        }
+
+        // 🎞️ Smooth animated transition to dashboard
+        await Future.delayed(const Duration(milliseconds: 400));
+        Navigator.of(context).pushReplacement(PageRouteBuilder(
+          pageBuilder: (_, __, ___) => StudentDashboard(
+            studentId: databaseId ?? user['id_number'] ?? id,  // Prefer database ID
+            studentName: fullName.isNotEmpty ? fullName : null,  // Pass full name
+          ),
+          transitionsBuilder: (_, animation, __, child) {
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0.2, 0),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            );
+          },
+          transitionDuration: const Duration(milliseconds: 600),
+        ));
       } catch (e) {
         debugPrint("Hive save error: $e");
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to save login info.")),
+          const SnackBar(
+            content: Text("Login successful but failed to save info."),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Invalid Student ID or Password")),
+        const SnackBar(
+          content: Text("Invalid credentials or account not active"),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     }
-
-    if (mounted) setState(() => _isLoading = false);
   }
-
 
   @override
   void dispose() {
     _controller.dispose();
+    _logoController.dispose();
     _idController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -147,12 +250,26 @@ class _LoginScreenState extends State<LoginScreen>
             child: Center(
               child: SingleChildScrollView(
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 28.0, vertical: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 28.0, vertical: 20),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Image.asset('assets/CicsLogo.png', width: 100),
+                      // 🎞️ Animated Logo
+                      AnimatedBuilder(
+                        animation: _logoController,
+                        builder: (context, child) {
+                          return Transform.scale(
+                            scale: _scaleAnimation.value,
+                            child: Transform.rotate(
+                              angle: _rotationAnimation.value,
+                              child: Opacity(
+                                opacity: _fadeAnimation.value,
+                                child: Image.asset('assets/CicsLogo.png', width: 110),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                       const SizedBox(height: 20),
                       Text(
                         "MOBE",
@@ -171,7 +288,8 @@ class _LoginScreenState extends State<LoginScreen>
                         ),
                       ),
                       const SizedBox(height: 30),
-                      // -------------------- Login Card --------------------
+
+                      // 🔹 Login Card
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
@@ -188,7 +306,6 @@ class _LoginScreenState extends State<LoginScreen>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Student ID
                             TextField(
                               controller: _idController,
                               decoration: const InputDecoration(
@@ -198,7 +315,6 @@ class _LoginScreenState extends State<LoginScreen>
                               ),
                             ),
                             const SizedBox(height: 16),
-                            // Password
                             TextField(
                               controller: _passwordController,
                               obscureText: _obscurePassword,
@@ -213,14 +329,12 @@ class _LoginScreenState extends State<LoginScreen>
                                         : Icons.visibility,
                                   ),
                                   onPressed: () {
-                                    setState(() =>
-                                        _obscurePassword = !_obscurePassword);
+                                    setState(() => _obscurePassword = !_obscurePassword);
                                   },
                                 ),
                               ),
                             ),
                             const SizedBox(height: 10),
-                            // Remember Me
                             Row(
                               children: [
                                 Checkbox(
@@ -232,15 +346,13 @@ class _LoginScreenState extends State<LoginScreen>
                               ],
                             ),
                             const SizedBox(height: 10),
-                            // Login Button
                             SizedBox(
                               width: double.infinity,
                               child: ElevatedButton(
                                 onPressed: _isLoading ? null : _login,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.blueAccent,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 14),
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
@@ -257,19 +369,20 @@ class _LoginScreenState extends State<LoginScreen>
                                     : const Text(
                                         "Login",
                                         style: TextStyle(
-                                            fontSize: 16, color: Colors.white),
+                                          fontSize: 16,
+                                          color: Colors.white,
+                                        ),
                                       ),
                               ),
                             ),
-                            const SizedBox(height: 10),
-                            // ✅ Removed Forgot Password Button
                           ],
                         ),
                       ),
                       const SizedBox(height: 20),
                       const Text(
-                        "Use any Student ID with password 12345",
+                        "Login with your Student ID and Password",
                         style: TextStyle(fontSize: 12, color: Colors.grey),
+                        textAlign: TextAlign.center,
                       ),
                     ],
                   ),
@@ -281,5 +394,4 @@ class _LoginScreenState extends State<LoginScreen>
       },
     );
   }
-
 }

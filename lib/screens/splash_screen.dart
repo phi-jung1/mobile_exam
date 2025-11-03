@@ -14,46 +14,64 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen>
     with TickerProviderStateMixin {
   bool showM = false;
-  double logoOpacity = 0.0;
+  bool showTagline = false;
 
   late AnimationController _flipController;
   late Animation<double> _flipAnimation;
   late AnimationController _gradientController;
-  late Timer logoTimer;
-  late Timer letterTimer;
+  late AnimationController _scaleController;
+  late Animation<double> _scaleAnimation;
+  late AnimationController _fadeController;
+  late Animation<double> _fadeAnimation;
+
   late Timer navigationTimer;
 
   @override
   void initState() {
     super.initState();
 
-    // Flip animation controller
+    // Logo scale (burst) animation
+    _scaleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+    _scaleAnimation = CurvedAnimation(
+      parent: _scaleController,
+      curve: Curves.easeOutBack,
+    );
+
+    // Flip animation controller (O → M)
     _flipController = AnimationController(
       duration: const Duration(milliseconds: 800),
       vsync: this,
     );
-
     _flipAnimation =
         Tween<double>(begin: 0.0, end: pi).animate(CurvedAnimation(
       parent: _flipController,
       curve: Curves.easeInOut,
     ));
 
-    // Gradient animation controller (looping)
+    // Gradient background animation
     _gradientController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 6),
     )..repeat(reverse: true);
 
-    // Fade-in logo
-    logoTimer = Timer(const Duration(milliseconds: 300), () {
-      setState(() {
-        logoOpacity = 1.0;
-      });
-    });
+    // Tagline fade-in animation
+    _fadeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _fadeController,
+      curve: Curves.easeIn,
+    );
 
-    // Trigger flip transition (O → M)
-    letterTimer = Timer(const Duration(milliseconds: 1500), () {
+    // Start sequence
+    _scaleController.forward();
+
+    // Trigger letter flip (O → M)
+    Future.delayed(const Duration(milliseconds: 1500), () {
       _flipController.forward().then((_) {
         setState(() {
           showM = true;
@@ -61,7 +79,13 @@ class _SplashScreenState extends State<SplashScreen>
       });
     });
 
-    // Navigate to Login
+    // Show tagline before navigation
+    Future.delayed(const Duration(milliseconds: 3200), () {
+      setState(() => showTagline = true);
+      _fadeController.forward();
+    });
+
+    // Navigate to Login screen
     navigationTimer = Timer(const Duration(seconds: 5), () {
       Navigator.pushReplacement(
         context,
@@ -72,11 +96,11 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   void dispose() {
-    logoTimer.cancel();
-    letterTimer.cancel();
     navigationTimer.cancel();
     _flipController.dispose();
     _gradientController.dispose();
+    _scaleController.dispose();
+    _fadeController.dispose();
     super.dispose();
   }
 
@@ -98,77 +122,97 @@ class _SplashScreenState extends State<SplashScreen>
     return AnimatedBuilder(
       animation: _gradientController,
       builder: (context, child) {
-        // Animate gradient stops between two sets of colors
+        final value = _gradientController.value;
+
+        // Moving gradient colors and direction
         final colors = [
-          Color.lerp(const Color(0xFF1565C0), const Color(0xFF1E88E5),
-              _gradientController.value)!,
-          Color.lerp(const Color(0xFF42A5F5), const Color(0xFF90CAF9),
-              _gradientController.value)!,
+          Color.lerp(const Color(0xFF1565C0), const Color(0xFF42A5F5), value)!,
+          Color.lerp(const Color(0xFF42A5F5), const Color(0xFF90CAF9), value)!,
         ];
+
+        final alignment = Alignment(
+          -1 + 2 * value,
+          1 - 2 * value,
+        );
 
         return Scaffold(
           body: Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: colors,
-                begin: Alignment.topLeft,
+                begin: alignment,
                 end: Alignment.bottomRight,
               ),
             ),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Logo Fade-In
-                  AnimatedOpacity(
-                    duration: const Duration(seconds: 1),
-                    opacity: logoOpacity,
-                    child: Image.asset('assets/CicsLogo.png', width: 120),
-                  ),
-                  const SizedBox(height: 20),
+            child: ScaleTransition(
+              scale: _scaleAnimation,
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Logo
+                    Image.asset('assets/CicsLogo.png', width: 120),
+                    const SizedBox(height: 20),
 
-                  Text(
-                    'College of Information and Computing Sciences',
-                    style: GoogleFonts.poppins(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white,
+                    Text(
+                      'College of Information and Computing Sciences',
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                    textAlign: TextAlign.center,
-                  ),
 
-                  const SizedBox(height: 40),
+                    const SizedBox(height: 40),
 
-                  // Flip animation O → M
-                  AnimatedBuilder(
-                    animation: _flipAnimation,
-                    builder: (context, child) {
-                      final isFirstHalf = _flipAnimation.value < pi / 2;
-                      final rotationValue = isFirstHalf
-                          ? _flipAnimation.value
-                          : _flipAnimation.value - pi;
+                    // Flip animation O → M
+                    AnimatedBuilder(
+                      animation: _flipAnimation,
+                      builder: (context, child) {
+                        final isFirstHalf = _flipAnimation.value < pi / 2;
+                        final rotationValue = isFirstHalf
+                            ? _flipAnimation.value
+                            : _flipAnimation.value - pi;
 
-                      return Transform(
-                        transform: Matrix4.rotationY(rotationValue),
-                        alignment: Alignment.center,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(isFirstHalf ? 'O' : 'M', style: textStyle),
-                            Text('obe', style: textStyle),
-                          ],
+                        return Transform(
+                          transform: Matrix4.rotationY(rotationValue),
+                          alignment: Alignment.center,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(isFirstHalf ? 'M' : 'M', style: textStyle),
+                              Text('obe', style: textStyle),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    // Tagline Fade-In
+                    FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: Text(
+                        showTagline
+                            ? 'Empowering Digital Minds...'
+                            : '',
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          color: Colors.white70,
+                          fontStyle: FontStyle.italic,
                         ),
-                      );
-                    },
-                  ),
+                      ),
+                    ),
 
-                  const SizedBox(height: 40),
-
-                  const CircularProgressIndicator(
-                    strokeWidth: 3,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
-                ],
+                    const SizedBox(height: 40),
+                    const CircularProgressIndicator(
+                      strokeWidth: 3,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

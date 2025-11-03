@@ -9,24 +9,86 @@ import 'screens/results_screen.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'services/api_service.dart';
+
+// ✅ ADDED: API Configuration
+class ApiConfig {
+  static const String baseUrl = 'https://yourserver.com';
+  static const String submitEndpoint = '/api/exam/submit';
+  static const Duration syncTimeout = Duration(seconds: 10);
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Hive.initFlutter();
-  await Hive.openBox('examBox');
-
-  // ✅ Run auto-sync at app startup
-  await autoSyncPendingExams();
-
-  // ✅ Listen for network reconnect to trigger sync
-  Connectivity().onConnectivityChanged.listen((result) {
-    if (result != ConnectivityResult.none) {
-      debugPrint('🌐 Network reconnected — syncing pending exams...');
-      autoSyncPendingExams();
-    }
-  });
-
-  runApp(const MyApp());
+  
+  try {
+    await Hive.initFlutter();
+    await Hive.openBox('examBox');
+    
+    // ✅ Initialize authentication token from storage
+    await ApiService.initializeAuth();
+    
+    // ✅ Run auto-sync at app startup with error handling
+    await autoSyncPendingExams();
+    
+    // ✅ FIXED: Listen for network reconnect with error handling and debouncing
+    DateTime? lastSyncAttempt;
+    Connectivity().onConnectivityChanged.listen((results) {
+      try {
+        final result = results.isNotEmpty ? results.first : ConnectivityResult.none;
+        
+        if (result != ConnectivityResult.none) {
+          // ✅ Debounce sync attempts (prevent rapid retries)
+          final now = DateTime.now();
+          if (lastSyncAttempt != null && 
+              now.difference(lastSyncAttempt!).inSeconds < 30) {
+            debugPrint('🚫 Skipping sync - too soon since last attempt');
+            return;
+          }
+          
+          lastSyncAttempt = now;
+          debugPrint('🌐 Network reconnected — syncing pending exams...');
+          
+          // ✅ Run sync in separate zone to catch errors
+          autoSyncPendingExams().catchError((error) {
+            debugPrint('⚠️ Auto-sync error on reconnect: $error');
+          });
+        }
+      } catch (e) {
+        debugPrint('⚠️ Error in connectivity listener: $e');
+      }
+    });
+    
+    runApp(const MyApp());
+  } catch (e, stackTrace) {
+    debugPrint('❌ Fatal error during app initialization: $e');
+    debugPrint('Stack trace: $stackTrace');
+    
+    // ✅ Show error screen instead of crashing
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+              const SizedBox(height: 20),
+              const Text(
+                'Failed to initialize app',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                e.toString(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ));
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -45,7 +107,22 @@ class MyApp extends StatelessWidget {
         '/dashboard': (context) {
           final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
           final studentId = args?['studentId'] as String? ?? '';
-          return StudentDashboard(studentId: studentId);
+          final studentName = args?['studentName'] as String?;
+          
+          // ✅ ADDED: Validation
+          if (studentId.isEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              Navigator.pushReplacementNamed(context, '/login');
+            });
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          
+          return StudentDashboard(
+            studentId: studentId,
+            studentName: studentName,
+          );
         },
         '/otp': (context) {
           final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
@@ -70,10 +147,25 @@ class MyApp extends StatelessWidget {
           final studentId = args?['studentId'] as String? ?? '';
           final subject = args?['subject'] as String? ?? '';
           final examId = args?['examId'] as String? ?? '';
+          final assignmentId = args?['assignmentId'] as String?;
+          
+          // ✅ ADDED: Validation
+          if (studentId.isEmpty || examId.isEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              Navigator.pushReplacementNamed(context, '/dashboard', arguments: {
+                'studentId': studentId,
+              });
+            });
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          
           return ExamScreen(
             studentId: studentId,
             subject: subject,
             examId: examId,
+            assignmentId: assignmentId,
           );
         },
         '/results': (context) {
@@ -81,6 +173,8 @@ class MyApp extends StatelessWidget {
           return ResultsScreen(
             examId: args['examId'],
             studentId: args['studentId'],
+            examTitle: args['examTitle'],
+            subject: args['subject'],
           );
         },
       },
@@ -88,66 +182,106 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// ✅ IMPROVED: Better error handling and timeout management
 Future<void> autoSyncPendingExams() async {
-  final examBox = Hive.box('examBox');
-  final connectivity = await Connectivity().checkConnectivity();
+  try {
+    final examBox = Hive.box('examBox');
+    final connectivity = await Connectivity().checkConnectivity();
+    final result = connectivity.isNotEmpty ? connectivity.first : ConnectivityResult.none;
 
-  if (connectivity == ConnectivityResult.none) {
-    debugPrint('🚫 No network — skipping auto sync.');
-    return;
-  }
+    if (result == ConnectivityResult.none) {
+      debugPrint('🚫 No network — skipping auto sync.');
+      return;
+    }
 
-  debugPrint('🌐 Starting auto-sync for pending exams...');
+    debugPrint('🌐 Starting auto-sync for pending exams...');
 
-  for (var exam in examBox.values) {
-    if (exam is Map &&
-        exam['submitted'] == true &&
-        exam['synced'] != true) {
-      try {
-        final attemptKey = 'attempt_${exam['examId']}_${exam['studentId']}';
+    // ✅ ADDED: Track sync statistics
+    int successCount = 0;
+    int failureCount = 0;
+    int skippedCount = 0;
 
-        final payload = {
-          'studentId': exam['studentId'],
-          'examId': exam['examId'],
-          'answers': exam['answers'] ?? {},
-          'flaggedQuestions': exam['flaggedQuestions'] ?? [],
-          'submitted': true,
-          'timestamp': DateTime.now().toIso8601String(),
-          'questions': exam['questions'] ?? [],
-          'score': exam['score'] ?? 0,
-          'totalMarks': exam['totalMarks'] ?? 0,
-          'correctMarks': exam['correctMarks'] ?? 0,
-        };
+    for (var exam in examBox.values) {
+      if (exam is! Map) {
+        skippedCount++;
+        continue;
+      }
 
-        debugPrint('📡 Attempting sync for ${exam['examId']} (${exam['studentId']})...');
+      if (exam['submitted'] == true && exam['synced'] != true) {
+        try {
+          final attemptKey = 'attempt_${exam['examId']}_${exam['studentId']}';
 
-        final url = Uri.parse('https://yourserver.com/api/exam/submit');
-        final response = await http
-            .post(
-              url,
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode(payload),
-            )
-            .timeout(const Duration(seconds: 6));
+          final payload = {
+            'studentId': exam['studentId'],
+            'examId': exam['examId'],
+            'answers': exam['answers'] ?? {},
+            'flaggedQuestions': exam['flaggedQuestions'] ?? [],
+            'submitted': true,
+            'timestamp': DateTime.now().toIso8601String(),
+            'questions': exam['questions'] ?? [],
+            'score': exam['score'] ?? 0,
+            'totalMarks': exam['totalMarks'] ?? 0,
+            'correctMarks': exam['correctMarks'] ?? 0,
+          };
 
-        if (response.statusCode == 200) {
-          // ✅ Update same record using consistent key format
-          await examBox.put(attemptKey, {
-            ...exam,
-            'synced': true,
-            'lastSyncedAt': DateTime.now().toIso8601String(),
-          });
+          debugPrint('📡 Attempting sync for ${exam['examId']} (${exam['studentId']})...');
 
-          debugPrint('✅ Auto-sync success for ${exam['examId']}');
-        } else {
-          debugPrint('❌ Auto-sync failed: ${response.statusCode} for ${exam['examId']}');
+          // ✅ FIXED: Use config constant and better timeout
+          final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.submitEndpoint}');
+          final response = await http
+              .post(
+                url,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json',
+                },
+                body: jsonEncode(payload),
+              )
+              .timeout(
+                ApiConfig.syncTimeout,
+                onTimeout: () {
+                  debugPrint('⏱️ Sync timeout for ${exam['examId']}');
+                  return http.Response('{"error": "timeout"}', 408);
+                },
+              );
+
+          if (response.statusCode == 200) {
+            // ✅ Update same record using consistent key format
+            await examBox.put(attemptKey, {
+              ...exam,
+              'synced': true,
+              'lastSyncedAt': DateTime.now().toIso8601String(),
+            });
+
+            debugPrint('✅ Auto-sync success for ${exam['examId']}');
+            successCount++;
+          } else {
+            debugPrint('❌ Auto-sync failed: ${response.statusCode} for ${exam['examId']}');
+            failureCount++;
+            
+            // ✅ ADDED: Mark with retry count
+            final retryCount = (exam['syncRetryCount'] ?? 0) + 1;
+            await examBox.put(attemptKey, {
+              ...exam,
+              'syncRetryCount': retryCount,
+              'lastSyncAttempt': DateTime.now().toIso8601String(),
+            });
+          }
+        } catch (e) {
+          debugPrint('⚠️ Error during auto-sync for ${exam['examId']}: $e');
+          failureCount++;
         }
-      } catch (e) {
-        debugPrint('⚠️ Error during auto-sync for ${exam['examId']}: $e');
+      } else {
+        skippedCount++;
       }
     }
+
+    debugPrint('🔁 Auto-sync completed:');
+    debugPrint('   ✅ Success: $successCount');
+    debugPrint('   ❌ Failed: $failureCount');
+    debugPrint('   ⏭️ Skipped: $skippedCount');
+  } catch (e, stackTrace) {
+    debugPrint('❌ Fatal error in autoSyncPendingExams: $e');
+    debugPrint('Stack trace: $stackTrace');
   }
-
-  debugPrint('🔁 Auto-sync check completed.');
 }
-

@@ -2,10 +2,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:flutter/foundation.dart';
+import '../services/api_service.dart';
 
 class StudentDashboard extends StatefulWidget {
   final String studentId;
-  const StudentDashboard({super.key, required this.studentId});
+  final String? studentName;
+  
+  const StudentDashboard({
+    super.key, 
+    required this.studentId,
+    this.studentName,
+  });
 
   @override
   State<StudentDashboard> createState() => _StudentDashboardState();
@@ -18,88 +26,215 @@ class _StudentDashboardState extends State<StudentDashboard>
   Color _bannerColor = Colors.grey.shade300;
   late Box examBox;
   bool _isSyncing = false;
-  bool _isRefreshing = false;
   bool _isManualSyncing = false;
+  bool _disposed = false;
   late TabController _tabController;
   final ScrollController _scrollController = ScrollController();
   bool _showFAB = false;
 
-    @override
+  // Debouncing for connectivity changes
+  Timer? _connectivityDebounceTimer;
+  DateTime? _lastSyncTime;
+  static const _syncCooldown = Duration(seconds: 5);
+
+  @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _initHive();
     _initConnectivity();
 
+    // ✅ Fixed: Added disposal check and debouncing
     _connectivitySubscription =
         Connectivity().onConnectivityChanged.listen((results) {
+      if (_disposed) return;
+      
       final result = results.isNotEmpty ? results.first : ConnectivityResult.none;
       _updateConnectionStatus(result);
-      if (result != ConnectivityResult.none) _autoSync();
+      
+      // Debounce auto-sync to prevent rapid repeated calls
+      _connectivityDebounceTimer?.cancel();
+      _connectivityDebounceTimer = Timer(const Duration(seconds: 2), () {
+        if (!_disposed && result != ConnectivityResult.none) {
+          _autoSync();
+        }
+      });
     });
 
     _scrollController.addListener(() {
-      if (!mounted) return;
+      if (!mounted || _disposed) return;
       setState(() => _showFAB = _scrollController.offset > 200);
     });
   }
 
   Future<void> _initHive() async {
-  examBox = await Hive.openBox('examBox');
+    try {
+      examBox = await Hive.openBox('examBox');
+      
+      // ✅ Restore authentication token from Hive
+      try {
+        final loginBox = await Hive.openBox('loginBox');
+        final savedToken = loginBox.get('authToken');
+        if (savedToken != null) {
+          ApiService.setAuthToken(savedToken);
+          debugPrint('✅ Restored auth token from storage');
+        } else {
+          debugPrint('⚠️ No auth token found in storage');
+        }
+      } catch (e) {
+        debugPrint('⚠️ Error restoring auth token: $e');
+      }
 
-  // ✅ Ensure every existing record has a proper 'recordType'
-  for (var key in examBox.keys) {
-    final record = examBox.get(key);
-    if (record is Map && record['recordType'] == null) {
-      await examBox.put(key, {...record, 'recordType': 'exam'});
+      // ✅ Ensure every existing record has a proper 'recordType'
+      final keys = examBox.keys.toList();
+      for (var key in keys) {
+        if (_disposed) return;
+        final record = examBox.get(key);
+        if (record is Map && record['recordType'] == null) {
+          await examBox.put(key, {...record, 'recordType': 'exam'});
+        }
+      }
+
+      // 🧹 Clean malformed or old entries (safety measure)
+      await _cleanupStaleData();
+
+      // Fetch exams from server
+      await _fetchExamsFromServer();
+
+      if (mounted && !_disposed) {
+        setState(() {}); // refresh UI
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error initializing Hive: $e');
     }
   }
 
-  // 🧹 Clean malformed or old entries (safety measure)
-  for (var key in examBox.keys.toList()) {
-    if (key is! String || !key.contains('_')) {
-      await examBox.delete(key);
+  /// 🧹 Cleanup stale cached data (older than 7 days)
+  Future<void> _cleanupStaleData() async {
+    try {
+      final now = DateTime.now();
+      final keys = examBox.keys.toList();
+      int deletedCount = 0;
+
+      for (var key in keys) {
+        if (_disposed) return;
+        
+        // Delete malformed keys
+        if (key is! String || !key.contains('_')) {
+          await examBox.delete(key);
+          deletedCount++;
+          continue;
+        }
+
+        // Delete old cached data (older than 7 days)
+        final record = examBox.get(key);
+        if (record is Map && record['timestamp'] != null) {
+          try {
+            final timestamp = DateTime.parse(record['timestamp']);
+            if (now.difference(timestamp).inDays > 7) {
+              await examBox.delete(key);
+              deletedCount++;
+            }
+          } catch (e) {
+            // Invalid timestamp, skip
+          }
+        }
+      }
+
+      if (deletedCount > 0) {
+        debugPrint('🧹 Cleaned up $deletedCount stale cache entries');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error during cleanup: $e');
     }
   }
 
-  final mockData = _mockExamData();
+  /// ✅ Fixed: Parallel fetch operations and consistent key format
+  Future<void> _fetchExamsFromServer() async {
+    if (_disposed) return;
+    
+    try {
+      debugPrint('📡 Fetching exams from server...');
+      
+      // Fetch exams from API
+      final apiExams = await ApiService.fetchExams();
+      
+      if (_disposed) return;
+      
+      debugPrint('📊 Received ${apiExams.length} exams from API');
+      
+      if (apiExams.isEmpty) {
+        debugPrint('⚠️ No exams returned from API, using cached data');
+        return;
+      }
 
-  // ✅ Insert mock exams only if they don't exist yet
-  for (var exam in mockData) {
-    final metaKey = 'meta_${exam['id']}_${widget.studentId}';
-    final existing = examBox.get(metaKey);
+      debugPrint('✅ Processing ${apiExams.length} exams from server');
 
-    if (existing == null) {
-      await examBox.put(metaKey, {
-        ...exam,
-        'recordType': 'exam',
-        'studentId': widget.studentId,
-        'attemptId': 1,
-        'submitted': exam['submitted'] ?? false,
-        'available': !(exam['submitted'] ?? false),
-        'flagged': false,
-        'completedAt': null,
-        'questions': exam['questions'] ?? [],
-      });
+      // ✅ Fixed: Use Future.wait for parallel operations instead of sequential awaits
+      final cacheOperations = <Future>[];
+      
+      for (var apiExam in apiExams) {
+        if (_disposed) return;
+        
+        final exam = ApiService.parseExamForApp(apiExam);
+        // ✅ Fixed: Consistent key format - always use widget.studentId
+        final metaKey = 'meta_${exam['examId']}_${widget.studentId}';
+        
+        if (kDebugMode) {
+          debugPrint('════════════════════════════════════════════════════════════');
+          debugPrint('💾 CACHING EXAM:');
+          debugPrint('   Title: ${exam['title']}');
+          debugPrint('   Exam ID: ${exam['examId']}');
+          debugPrint('   Assignment ID: ${exam['assignmentId']}');
+          debugPrint('   Cache Key: $metaKey');
+          debugPrint('   Available: ${exam['available']}');
+          debugPrint('   Submitted: ${exam['submitted']}');
+        }
+        
+        final cachedData = {
+          ...exam,
+          'recordType': 'exam',
+          'studentId': widget.studentId, // ✅ Always use widget.studentId
+          'attemptId': exam['attempt']?['attempt_id'],
+          'submitted': exam['submitted'],
+          'available': exam['available'],
+          'flagged': false,
+          'completedAt': exam['attempt']?['end_time'],
+          'questions': exam['questions'] ?? [],
+          'timestamp': DateTime.now().toIso8601String(), // ✅ Add timestamp for cleanup
+        };
+        
+        // Add to parallel operations
+        cacheOperations.add(examBox.put(metaKey, cachedData));
+      }
+
+      // ✅ Fixed: Execute all cache operations in parallel
+      await Future.wait(cacheOperations);
+      
+      if (_disposed) return;
+
+      if (mounted) {
+        setState(() {}); // refresh UI
+      }
+      
+      debugPrint('🔄 UI refreshed with ${apiExams.length} exams');
+    } catch (e) {
+      debugPrint('⚠️ Error fetching exams from server: $e');
+      // Fallback to cached data (already in Hive)
     }
   }
-
-  debugPrint("🗂️ All exams in Hive after init:");
-  for (var e in examBox.values) {
-    debugPrint(e.toString());
-  }
-
-  setState(() {}); // refresh UI
-}
-
 
   Future<void> _initConnectivity() async {
     final results = await Connectivity().checkConnectivity();
+    if (_disposed) return;
+    
     final result = results.isNotEmpty ? results.first : ConnectivityResult.none;
     _updateConnectionStatus(result);
   }
 
   void _updateConnectionStatus(ConnectivityResult result) {
+    if (_disposed) return;
+    
     setState(() {
       switch (result) {
         case ConnectivityResult.wifi:
@@ -121,137 +256,123 @@ class _StudentDashboardState extends State<StudentDashboard>
     });
   }
 
-  //autosynccccccccc................
+  /// ✅ Fixed: Added cooldown period to prevent rapid syncs
   Future<void> _autoSync() async {
-    if (!mounted || _isSyncing) return;
+    if (_disposed || !mounted || _isSyncing) return;
+
+    // Check cooldown period
+    if (_lastSyncTime != null) {
+      final timeSinceLastSync = DateTime.now().difference(_lastSyncTime!);
+      if (timeSinceLastSync < _syncCooldown) {
+        debugPrint('⏳ Sync cooldown active, skipping (${_syncCooldown.inSeconds - timeSinceLastSync.inSeconds}s remaining)');
+        return;
+      }
+    }
 
     setState(() => _isSyncing = true);
+    _lastSyncTime = DateTime.now();
 
-    final mockData = _mockExamData();
-    final updates = <Future>[];
+    try {
+      // Fetch fresh exams from server
+      await _fetchExamsFromServer();
 
-    // Track metaKeys from mockData
-    final seenMetaKeys = <String>{};
-
-    for (var exam in mockData) {
-      final metaKey = 'meta_${exam['id']}_${widget.studentId}';
-      seenMetaKeys.add(metaKey);
-
-      final existing = examBox.get(metaKey);
-
-      if (existing != null) {
-        // ✅ Skip overwriting fully submitted exams
-        if (existing['submitted'] == true) {
-          continue; 
-        }
-
-        // Merge existing data with new data from mockData
-        final updated = {
-          ...exam, // new info
-          'recordType': 'exam',
-          'studentId': widget.studentId,
-          'submitted': existing['submitted'] ?? exam['submitted'] ?? false,
-          'studentAnswers': existing['studentAnswers'] ?? exam['studentAnswers'] ?? {},
-          'available': !(existing['submitted'] ?? exam['submitted'] ?? false),
-          'completedAt': existing['completedAt'],
-          'flagged': existing['flagged'] ?? false,
-          'questions': existing['questions'] ?? [],
-        };
-
-        updates.add(examBox.put(metaKey, updated));
-      } else {
-        // Insert new record if it doesn't exist yet
-        updates.add(examBox.put(metaKey, {
-          ...exam,
-          'recordType': 'exam',
-          'studentId': widget.studentId,
-          'attemptId': 1,
-          'submitted': exam['submitted'] ?? false,
-          'studentAnswers': exam['studentAnswers'] ?? {},
-          'available': !(exam['submitted'] ?? false),
-          'flagged': false,
-          'completedAt': null,
-          'questions': exam['questions'] ?? [],
-        }));
+      if (!mounted || _disposed) return;
+      
+      // Show success feedback
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("✅ Sync complete! Exams updated."),
+          backgroundColor: Colors.green.shade600,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      debugPrint('⚠️ Auto-sync error: $e');
+      if (!mounted || _disposed) return;
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("⚠️ Sync failed. Using cached data."),
+          backgroundColor: Colors.orange.shade600,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } finally {
+      if (mounted && !_disposed) {
+        setState(() => _isSyncing = false);
       }
     }
-
-    // Sync any "attempt" records
-    for (var key in examBox.keys.toList()) {
-      final record = examBox.get(key);
-      if (record is Map && record['recordType'] == 'attempt') {
-        final updatedAttempt = {
-          ...record,
-          'synced': true,
-          'lastSyncedAt': DateTime.now().toIso8601String(),
-        };
-        updates.add(examBox.put(key, updatedAttempt));
-      }
-    }
-
-    // Clean orphaned exams that are not in mockData
-    for (var key in examBox.keys.toList()) {
-      final record = examBox.get(key);
-      if (record is Map && record['recordType'] == 'exam') {
-        final metaKey = 'meta_${record['id']}_${record['studentId']}';
-        if (!seenMetaKeys.contains(metaKey) && record['submitted'] != true) {
-          updates.add(examBox.delete(key));
-        }
-      }
-    }
-
-    await Future.wait(updates);
-
-    if (!mounted) return;
-    setState(() => _isSyncing = false);
-
-    // User feedback
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text("✅ Sync complete! Data updated successfully."),
-        backgroundColor: Colors.green.shade600,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
-
-
 
   Future<void> _handleRefresh() async {
-    setState(() => _isRefreshing = true);
     await _autoSync();
     await Future.delayed(const Duration(milliseconds: 800));
-    setState(() => _isRefreshing = false);
   }
 
+  Future<void> _logout() async {
+    if (_disposed) return;
+    
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Confirm Logout"),
+        content: const Text("Are you sure you want to log out?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Logout"),
+          ),
+        ],
+      ),
+    );
 
-  List<Map<String, dynamic>> _mockExamData() => [
-      {
-        "id": "exam01",
-        "subject": "Dummy Exam1",
-        "date": "10/20/2025",
-        "available": true, // can be taken
-        "requiresOtp": true,
-        "resultsReleased": false,
-        "submitted": false,
-        "studentAnswers": {},
-      },
-      {
-        "id": "exam02",
-        "subject": "Dummy Exam2",
-        "date": "10/05/2025",
-        "available": false,
-        "requiresOtp": false,
-        "resultsReleased": false,
-        "submitted": true,
-        "studentAnswers": {"q1": "C", "q2": "D"},
+    if (shouldLogout != true || _disposed) return;
+
+    try {
+      // Clear login data from Hive
+      final loginBox = await Hive.openBox('loginBox');
+      await loginBox.delete('authToken');
+      await loginBox.delete('user');
+      await loginBox.delete('studentId');
+      await loginBox.put('rememberMe', false);
+      
+      // Clear auth token
+      ApiService.setAuthToken('');
+      
+      if (mounted && !_disposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("✅ Logged out successfully!"),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+
+        Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
       }
-    ];
-
+    } catch (e) {
+      if (mounted && !_disposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("❌ Logout failed: $e"),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
 
   @override
   void dispose() {
+    _disposed = true;
+    _connectivityDebounceTimer?.cancel();
     _connectivitySubscription?.cancel();
     _tabController.dispose();
     _scrollController.dispose();
@@ -259,22 +380,54 @@ class _StudentDashboardState extends State<StudentDashboard>
   }
 
   @override
-  Widget build(BuildContext context) {  
-    final allExams = examBox.values
-    .where((e) => e is Map && e['recordType'] == 'exam' && e['studentId'] == widget.studentId)
-    .cast<Map>()
-    .toList();
+  void didUpdateWidget(covariant StudentDashboard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.studentName != oldWidget.studentName) {
+      setState(() {});
+    }
+  }
 
-    // ✅ Available exams: only not submitted AND exam is available
-    final availableExams = allExams
-        .where((e) => e['available'] == true && e['submitted'] == false)
+  @override
+  Widget build(BuildContext context) {
+    // ✅ Fixed: Removed excessive debug logging in production
+    if (kDebugMode) {
+      debugPrint('\n🔍 BUILDING DASHBOARD - Reading from Hive cache...');
+      debugPrint('   Student ID: ${widget.studentId}');
+      debugPrint('   Total items in examBox: ${examBox.length}');
+    }
+    
+    // ✅ Fixed: More defensive filtering with null safety
+    final allExams = examBox.values
+        .where((e) => 
+          e is Map && 
+          e['recordType'] == 'exam' && 
+          e['studentId'] == widget.studentId)
+        .cast<Map>()
         .toList();
+
+    if (kDebugMode) {
+      debugPrint('📦 Total exams in cache for student ${widget.studentId}: ${allExams.length}');
+    }
+
+    // ✅ Fixed: Defensive null checks for available and submitted fields
+    final availableExams = allExams
+        .where((e) => 
+          (e['available'] == true) && 
+          (e['submitted'] != true))
+        .toList();
+
+    if (kDebugMode) {
+      debugPrint('✅ Available exams: ${availableExams.length}');
+    }
 
     // ✅ Completed exams: only submitted
     final completedExams = allExams
         .where((e) => e['submitted'] == true)
         .toList();
 
+    if (kDebugMode) {
+      debugPrint('✅ Completed exams: ${completedExams.length}');
+    }
 
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
@@ -289,13 +442,14 @@ class _StudentDashboardState extends State<StudentDashboard>
                       duration: const Duration(milliseconds: 500),
                       curve: Curves.easeInOut);
                 },
+                backgroundColor: Colors.blueAccent,
                 child: const Icon(Icons.arrow_upward),
               )
             : null,
       ),
       body: Column(
         children: [
-          ConnectivityBanner(
+          AnimatedConnectivityBanner(
             status: _connectionStatus,
             color: _bannerColor,
           ),
@@ -326,11 +480,34 @@ class _StudentDashboardState extends State<StudentDashboard>
     );
   }
 
-
   PreferredSizeWidget _buildAppBar() => AppBar(
-      title: Text("Welcome, ${widget.studentId}"),
+      title: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: Colors.white,
+            child: Text(
+              (widget.studentName ?? widget.studentId).isNotEmpty 
+                  ? (widget.studentName ?? widget.studentId)[0].toUpperCase()
+                  : "S",
+              style: const TextStyle(
+                color: Colors.blueAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              "Welcome, ${widget.studentName ?? widget.studentId}",
+              style: const TextStyle(fontSize: 18),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
       backgroundColor: Colors.transparent,
-      elevation: 0,
+      elevation: 3,
       flexibleSpace: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -358,6 +535,8 @@ class _StudentDashboardState extends State<StudentDashboard>
             icon: const Icon(Icons.sync),
             tooltip: 'Manual Sync',
             onPressed: () async {
+              if (_disposed) return;
+              
               setState(() => _isManualSyncing = true);
               final start = DateTime.now();
 
@@ -365,7 +544,7 @@ class _StudentDashboardState extends State<StudentDashboard>
                 await _autoSync();
                 final duration = DateTime.now().difference(start);
 
-                if (mounted) {
+                if (mounted && !_disposed) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
@@ -379,7 +558,7 @@ class _StudentDashboardState extends State<StudentDashboard>
                   );
                 }
               } catch (e) {
-                if (mounted) {
+                if (mounted && !_disposed) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text("❌ Sync failed: $e"),
@@ -390,39 +569,71 @@ class _StudentDashboardState extends State<StudentDashboard>
                   );
                 }
               } finally {
-                if (mounted) setState(() => _isManualSyncing = false);
+                if (mounted && !_disposed) {
+                  setState(() => _isManualSyncing = false);
+                }
               }
             },
           ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert, color: Colors.white),
+          onSelected: (value) async {
+            if (value == 'logout') {
+              await _logout();
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'logout',
+              child: Row(
+                children: [
+                  Icon(Icons.logout, color: Colors.redAccent),
+                  SizedBox(width: 8),
+                  Text(
+                    "Logout",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.redAccent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ],
       bottom: TabBar(
         controller: _tabController,
-        indicatorColor: Colors.white,
+        indicator: BoxDecoration(
+          borderRadius: BorderRadius.circular(25),
+          color: Colors.white.withOpacity(0.3),
+        ),
         tabs: const [
           Tab(text: "Available"),
           Tab(text: "Completed"),
         ],
       ),
     );
-
 }
 
-// ---------- Modular Widgets ---------- //
-
-class ConnectivityBanner extends StatelessWidget {
+// ---------- Animated Connectivity Banner ----------
+class AnimatedConnectivityBanner extends StatelessWidget {
   final String status;
   final Color color;
-  const ConnectivityBanner({super.key, required this.status, required this.color});
+  const AnimatedConnectivityBanner({super.key, required this.status, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(10),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 500),
       color: color,
+      padding: const EdgeInsets.all(10),
       child: Row(
         children: [
-          Icon(status.startsWith("Offline") ? Icons.wifi_off : Icons.wifi,
-              color: status.startsWith("Offline") ? Colors.red : Colors.green),
+          Icon(
+            status.startsWith("Offline") ? Icons.wifi_off : Icons.wifi,
+            color: status.startsWith("Offline") ? Colors.red : Colors.green,
+          ),
           const SizedBox(width: 8),
           Expanded(child: Text(status, style: const TextStyle(fontSize: 13))),
         ],
@@ -451,12 +662,18 @@ class ExamList extends StatelessWidget {
     required String route,
     required Map arguments,
     required bool forResults,
+    required String examPassword,
+    required int numericExamId,
   }) {
+    debugPrint('🔒 Navigating to OTP screen:');
+    debugPrint('   Exam ID (numeric): $numericExamId');
+    debugPrint('   Student ID: $studentId (type: ${studentId.runtimeType})');
+    
     Navigator.pushNamed(context, '/otp', arguments: {
       'subject': subject,
-      'expectedOTP': '1234',
       'forResults': forResults,
       'studentId': studentId,
+      'examId': numericExamId.toString(),
       'onVerified': () => Navigator.pushNamed(context, route, arguments: arguments),
     });
   }
@@ -475,31 +692,55 @@ class ExamList extends StatelessWidget {
       itemCount: exams.length,
       itemBuilder: (context, index) {
         final exam = exams[index];
-        final examId = (exam['id'] ?? '').toString();
+        final numericExamId = exam['examId'] ?? 0;
+        final examTitle = (exam['title'] ?? 'Untitled Exam').toString();
         final subject = (exam['subject'] ?? 'Unknown Subject').toString();
+        final subjectCode = (exam['subjectCode'] ?? '').toString();
         final date = (exam['date'] ?? 'No date set').toString();
         final requiresOtp = exam['requiresOtp'] ?? false;
+        final examPassword = (exam['examPassword'] ?? '1234').toString();
         final resultsReleased = exam['resultsReleased'] ?? false;
         final submitted = exam['submitted'] ?? false;
+        final inSchedule = exam['inSchedule'] ?? false;
 
         final buttonText = completed
-        ? (resultsReleased ? "View Results" : "Pending Results")
-        : "Take Exam";
+            ? (resultsReleased ? "View Results" : "Pending Results")
+            : (inSchedule ? "Take Exam" : "Scheduled");
 
-        // ✅ Button enabled only if:
-        // - Taking exam: available && not submitted
-        // - Viewing results: resultsReleased
         final isButtonEnabled = !completed
-            ? exam['available'] == true && !exam['submitted']
+            ? (exam['available'] == true && !exam['submitted'] && inSchedule)
             : resultsReleased;
 
         void onButtonPressed() {
-          if (!isButtonEnabled) return;
+          if (!isButtonEnabled) {
+            if (!completed && !inSchedule) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: const Text("⏰ This exam is not yet available. Please wait for the scheduled time."),
+                  backgroundColor: Colors.orange.shade600,
+                  behavior: SnackBarBehavior.floating,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            }
+            return;
+          }
 
           final route = completed ? '/results' : '/exam';
           final arguments = completed
-              ? {'examId': examId, 'studentId': studentId}
-              : {'studentId': studentId, 'subject': subject, 'examId': examId};
+              ? {
+                  'examId': numericExamId.toString(),
+                  'studentId': studentId,
+                  'examTitle': examTitle,
+                  'subject': subject,
+                }
+              : {
+                  'studentId': studentId,
+                  'subject': subject,
+                  'examId': numericExamId.toString(),
+                  'examTitle': examTitle,
+                  'assignmentId': exam['assignmentId']?.toString() ?? numericExamId.toString(),
+                };
 
           if (requiresOtp) {
             _navigateWithOtp(
@@ -508,199 +749,190 @@ class ExamList extends StatelessWidget {
               route: route,
               arguments: arguments,
               forResults: completed,
+              examPassword: examPassword,
+              numericExamId: numericExamId,
             );
           } else {
             Navigator.pushNamed(context, route, arguments: arguments);
           }
         }
 
+        final cardColor = completed ? Colors.orange.shade50 : Colors.blue.shade50;
+        final sideStripColor = completed
+            ? (resultsReleased ? Colors.greenAccent : Colors.orangeAccent)
+            : (exam['available'] == true && inSchedule ? Colors.blueAccent : Colors.grey);
 
-        // Determine card color
-        final cardColor = completed
-            ? Colors.orange.shade50
-            : Colors.blue.shade50;
-
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-          margin: const EdgeInsets.symmetric(vertical: 6),
-          decoration: BoxDecoration(
-            color: cardColor,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: const [
-              BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(2, 2)),
-            ],
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: onButtonPressed,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Subject title
-                    Text(
-                      subject,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-
-                    // Date and Status Row
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Date: $date",
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Colors.black54,
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.95, end: 1.0),
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOut,
+            builder: (context, scale, child) {
+              return Transform.scale(scale: scale, child: child);
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              decoration: BoxDecoration(
+                color: cardColor,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(2, 2)),
+                ],
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: onButtonPressed,
+                  child: Row(
+                    children: [
+                      // Gradient side strip
+                      Container(
+                        width: 8,
+                        height: 140,
+                        decoration: BoxDecoration(
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(16),
+                            bottomLeft: Radius.circular(16),
+                          ),
+                          gradient: LinearGradient(
+                            colors: [sideStripColor.withOpacity(0.6), sideStripColor],
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
                           ),
                         ),
-                        // ✅ Replace the Row below with a Wrap
-                        Flexible(
-                          child: Wrap(
-                            spacing: 6,
-                            runSpacing: 4,
-                            alignment: WrapAlignment.end,
+                      ),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (requiresOtp)
-                                Container(
-                                  padding:
-                                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.purple.shade100,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: const Text(
-                                    "OTP",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.purple,
+                              Text(
+                                examTitle,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                subjectCode.isNotEmpty ? '$subjectCode - $subject' : subject,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.blue.shade700,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "Date: $date",
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.black54,
                                     ),
                                   ),
-                                ),
-                              if (completed)
-                                Container(
-                                  padding:
-                                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: resultsReleased
-                                        ? Colors.green.shade100
-                                        : Colors.grey.shade300,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Text(
-                                    resultsReleased ? "Results Ready" : "Pending",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: resultsReleased
-                                          ? Colors.green.shade700
-                                          : Colors.grey.shade700,
-                                    ),
-                                  ),
-                                ),
-                              if (submitted)
-                                  (exam['synced'] == true)
-                                      ? Container(
-                                          constraints: const BoxConstraints(maxWidth: 80),
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: Colors.green.shade50,
-                                            border: Border.all(color: Colors.green.shade200),
-                                            borderRadius: BorderRadius.circular(12),
+                                  Flexible(
+                                    child: Wrap(
+                                      spacing: 6,
+                                      runSpacing: 4,
+                                      alignment: WrapAlignment.end,
+                                      children: [
+                                        if (!completed && inSchedule)
+                                          AnimatedOpacity(
+                                            opacity: 1,
+                                            duration: const Duration(milliseconds: 400),
+                                            child: _badge("📅 Active", Colors.green),
                                           ),
-                                          child: const FittedBox(
-                                            fit: BoxFit.scaleDown,
-                                            child: Text(
-                                              "Synced ✅",
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600,
-                                                color: Colors.green,
-                                              ),
+                                        if (!completed && !inSchedule)
+                                          AnimatedOpacity(
+                                            opacity: 1,
+                                            duration: const Duration(milliseconds: 400),
+                                            child: _badge("📋 Scheduled", Colors.blue),
+                                          ),
+                                        if (requiresOtp)
+                                          AnimatedOpacity(
+                                            opacity: 1,
+                                            duration: const Duration(milliseconds: 400),
+                                            child: _badge("🔒 Password", Colors.purple),
+                                          ),
+                                        if (completed)
+                                          AnimatedOpacity(
+                                            opacity: 1,
+                                            duration: const Duration(milliseconds: 400),
+                                            child: _badge(
+                                              resultsReleased ? "Results Ready" : "Pending",
+                                              resultsReleased ? Colors.green.shade700 : Colors.grey.shade700,
                                             ),
                                           ),
-                                        )
-                                      : TweenAnimationBuilder<double>(
-                                          tween: Tween(begin: 0.6, end: 1.0),
-                                          duration: const Duration(seconds: 1),
-                                          curve: Curves.easeInOut,
-                                          builder: (context, value, child) {
-                                            return Opacity(
-                                              opacity: value,
-                                              child: Container(
-                                                constraints: const BoxConstraints(maxWidth: 80),
-                                                padding:
-                                                    const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.orange.shade50,
-                                                  border: Border.all(color: Colors.orange.shade200),
-                                                  borderRadius: BorderRadius.circular(12),
-                                                ),
-                                                child: const FittedBox(
-                                                  fit: BoxFit.scaleDown,
-                                                  child: Text(
-                                                    "Syncing…",
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight: FontWeight.w600,
-                                                      color: Colors.orange,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        onEnd: () {
-                                          if (context.mounted) {
-                                            (context as Element).markNeedsBuild();
-                                          }
-                                        },
-                                      ),
+                                        if (submitted)
+                                          AnimatedOpacity(
+                                            opacity: 1,
+                                            duration: const Duration(milliseconds: 400),
+                                            child: _badge(
+                                              exam['synced'] == true ? "Synced ✅" : "Syncing…",
+                                              exam['synced'] == true ? Colors.green : Colors.orange,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton(
+                                  onPressed: isButtonEnabled ? onButtonPressed : null,
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    backgroundColor: completed ? Colors.orange : Colors.blueAccent,
+                                    elevation: 2,
+                                  ),
+                                  child: Text(
+                                    buttonText,
+                                    style: const TextStyle(fontSize: 16),
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // Action Button
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: isButtonEnabled ? onButtonPressed : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: completed ? Colors.orange : Colors.blueAccent,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: Text(
-                            buttonText,
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _badge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          color: color,
+        ),
+      ),
     );
   }
 }
