@@ -47,6 +47,7 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
   // Method channels for anti-cheat
   static const _overlayChannel = MethodChannel('overlay_detector');
   static const _screenshotChannel = MethodChannel('screenshot_detector');
+  static const _splitScreenChannel = MethodChannel('split_screen_detector');
 
   bool _disposed = false;
   late Box examBox;
@@ -92,6 +93,11 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
   DateTime? _lastExitEventTime;
   DateTime? _lastAutoSaveTime;
 
+  //split screen detection method
+  bool _isInSplitScreen = false;
+  StreamSubscription? _splitScreenSubscription;
+  bool _isSplitScreenWarningVisible = false;
+
   @override
   void initState() {
     super.initState();
@@ -119,8 +125,10 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
         _checkForUnfinishedExam();
 
         // Start anti-cheat measures
+        _listenForSplitScreen();
         _listenForScreenshots();
         _startFocusCheck();
+        _startSplitScreenCheck();
         _startOverlayCheck();
       });
     });
@@ -1183,6 +1191,237 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
     }
   }
 
+// -------------------------
+// Split Screen Detection
+// -------------------------
+void _listenForSplitScreen() {
+  if (_disposed) return;
+  
+  _splitScreenChannel.setMethodCallHandler((call) async {
+    if (_disposed || !mounted) return;
+    
+    if (call.method == "onSplitScreenChanged") {
+      final isInSplitScreen = call.arguments['isInSplitScreen'] as bool? ?? false;
+      
+      if (kDebugMode) {
+        debugPrint("📱 Split screen status changed: $isInSplitScreen");
+      }
+      
+      if (isInSplitScreen && !submitted && !_isSplitScreenWarningVisible) {
+        if (mounted) {
+          setState(() {
+            _isInSplitScreen = true;
+          });
+        }
+        await _handleSplitScreenDetected();
+      } else if (!isInSplitScreen) {
+        if (mounted) {
+          setState(() {
+            _isInSplitScreen = false;
+          });
+        }
+      }
+    }
+  });
+  
+  _checkSplitScreenStatus();
+}
+
+void _startSplitScreenCheck() {
+  if (_disposed) return;
+  
+  Timer.periodic(const Duration(seconds: 3), (timer) {
+    if (_disposed || !mounted || submitted) {
+      timer.cancel();
+      return;
+    }
+    _checkSplitScreenStatus();
+  });
+}
+
+Future<void> _checkSplitScreenStatus() async {
+  if (_disposed || !mounted || _isSplitScreenWarningVisible) return;
+  
+  try {
+    final isInSplitScreen = await _splitScreenChannel
+        .invokeMethod<bool>('checkSplitScreen')
+        .timeout(const Duration(seconds: 2), onTimeout: () => false) ?? false;
+    
+    if (kDebugMode) {
+      debugPrint('🔍 Split screen check: $isInSplitScreen');
+    }
+    
+    // FIX: Only trigger if state changed
+    if (isInSplitScreen && !_isInSplitScreen && !submitted && mounted) {
+      setState(() {
+        _isInSplitScreen = true;
+      });
+      await _handleSplitScreenDetected();
+    } else if (!isInSplitScreen && _isInSplitScreen && mounted) {
+      setState(() {
+        _isInSplitScreen = false;
+      });
+    }
+  } catch (e) {
+    if (kDebugMode) {
+      debugPrint('Split screen detection failed: $e');
+    }
+  }
+}
+
+Future<void> _handleSplitScreenDetected() async {
+  if (_disposed || !mounted || submitted || _isWarningDialogVisible || _isSplitScreenWarningVisible) return;
+  
+  if (kDebugMode) {
+    debugPrint("🚨 Split screen detected during exam!");
+  }
+  
+  flaggedSuspicious = true;
+  showSuspiciousBanner = true;
+  _exitCount = (_exitCount + 1).clamp(0, 3);
+  
+  _saveLocalDataThrottled();
+  
+  final timerWasActive = _timer?.isActive ?? false;
+  _cancelTimer();
+  
+  if (_exitCount >= 3) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (_disposed || !mounted) return;
+      await submitExam(autoSubmitted: true);
+    });
+    return;
+  }
+  
+  final message = _exitCount == 1
+      ? "⚠️ Split screen detected! Please exit split screen mode immediately."
+      : "⚠️ Split screen detected again! One more violation will auto-submit your exam.";
+  
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    if (_disposed || !mounted) return;
+    await _showSplitScreenWarning(message, timerWasActive);
+  });
+}
+
+Future<void> _showSplitScreenWarning(String message, bool restartTimer) async {
+  if (_disposed || !mounted || _isWarningDialogVisible || _isSplitScreenWarningVisible) return;
+  
+  _isWarningDialogVisible = true;
+  _isSplitScreenWarningVisible = true; // FIX: Prevent duplicate dialogs
+  
+  try {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [ // FIX: Remove const
+              Icon(
+                Icons.splitscreen,
+                color: Colors.red,
+                size: 32,
+              ),
+              SizedBox(width: 10),
+              Text("Split Screen Detected!"),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(message),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: const Text(
+                  "Please exit split screen mode before continuing. "
+                  "Using split screen during an exam is prohibited.",
+                  style: TextStyle(fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () async {
+                // FIX: Add debouncing and better error handling
+                try {
+                  final stillInSplitScreen = await _splitScreenChannel
+                      .invokeMethod<bool>('checkSplitScreen')
+                      .timeout(
+                        const Duration(seconds: 3),
+                        onTimeout: () => false,
+                      ) ?? false;
+                  
+                  if (!mounted) return;
+                  
+                  if (stillInSplitScreen) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please exit split screen mode first!'),
+                        backgroundColor: Colors.red,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                    // Don't close dialog - keep it open
+                  } else {
+                    // Successfully exited split screen
+                    Navigator.pop(context);
+                  }
+                } catch (e) {
+                  if (kDebugMode) {
+                    debugPrint('⚠️ Error checking split screen in dialog: $e');
+                  }
+                  if (!mounted) return;
+                  
+                  // Assume they exited if check fails
+                  Navigator.pop(context);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+              ),
+              child: const Text("I've Exited Split Screen"),
+            ),
+          ],
+        ),
+      ),
+    );
+  } finally {
+    _isWarningDialogVisible = false;
+    _isSplitScreenWarningVisible = false; // FIX: Reset flag
+    
+    if (!_disposed && !submitted && restartTimer) {
+      startTimer();
+      if (kDebugMode) {
+        debugPrint("✅ Timer resumed after split screen warning");
+      }
+    }
+    
+    // FIX: Verify split screen status after dialog closes
+    if (!_disposed && mounted) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (!_disposed && mounted) {
+          _checkSplitScreenStatus();
+        }
+      });
+      
+      setState(() {});
+    }
+  }
+}
+
+
   void _cancelTimer() {
     _timer?.cancel();
     _autoSaveTimer?.cancel();
@@ -1584,6 +1823,10 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
     _focusCheckTimer?.cancel();
     _overlayCheckTimer?.cancel();
     _cancelTimer();
+
+    // Proper cleanup for split screen detection
+    _splitScreenChannel.setMethodCallHandler(null);
+    _splitScreenSubscription?.cancel();
 
     // Remove observer
     WidgetsBinding.instance.removeObserver(this);

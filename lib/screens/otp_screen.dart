@@ -30,6 +30,7 @@ class OTPScreen extends StatefulWidget {
 class _OTPScreenState extends State<OTPScreen>
     with SingleTickerProviderStateMixin {
   final TextEditingController passwordController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
   bool _obscurePassword = true;
   bool _isVerifying = false;
   bool _isError = false;
@@ -47,6 +48,13 @@ class _OTPScreenState extends State<OTPScreen>
     _shakeAnimation = Tween<double>(begin: 0, end: 12)
         .chain(CurveTween(curve: Curves.elasticIn))
         .animate(_shakeController);
+    
+    // Auto-focus the text field when screen opens
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_disposed) {
+        _focusNode.requestFocus();
+      }
+    });
   }
 
   Future<void> _verifyPassword() async {
@@ -198,8 +206,9 @@ class _OTPScreenState extends State<OTPScreen>
         success: false,
       );
       
-      // Clear the password field
+      // Clear the password field and refocus
       passwordController.clear();
+      _focusNode.requestFocus();
     }
 
     if (mounted && !_disposed) {
@@ -244,6 +253,7 @@ class _OTPScreenState extends State<OTPScreen>
   void dispose() {
     _disposed = true;
     passwordController.dispose();
+    _focusNode.dispose();
     _shakeController.dispose();
     super.dispose();
   }
@@ -339,65 +349,85 @@ class _OTPScreenState extends State<OTPScreen>
                             child: child,
                           );
                         },
-                        child: TextField(
-                          controller: passwordController,
-                          obscureText: _obscurePassword,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            letterSpacing: 1.5,
-                            fontWeight: FontWeight.w600,
+                        child: Container(
+                          constraints: const BoxConstraints(maxWidth: 400),
+                          child: TextField(
+                            controller: passwordController,
+                            focusNode: _focusNode,
+                            obscureText: _obscurePassword,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 20,
+                              letterSpacing: _obscurePassword ? 8.0 : 1.2,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: "Enter password",
+                              hintStyle: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 16,
+                                letterSpacing: 1.0,
+                              ),
+                              prefixIcon: const Icon(
+                                Icons.password_rounded,
+                                size: 24,
+                              ),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                  size: 24,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _obscurePassword = !_obscurePassword;
+                                  });
+                                },
+                                tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                              ),
+                              filled: true,
+                              fillColor: Colors.grey.shade50,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 18,
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                  color: _isError ? Colors.red : Colors.blueAccent,
+                                  width: 2.5,
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                  color: _isError
+                                      ? Colors.red.shade300
+                                      : Colors.grey.shade300,
+                                  width: 1.5,
+                                ),
+                              ),
+                              errorBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                  color: Colors.red,
+                                  width: 2.5,
+                                ),
+                              ),
+                              focusedErrorBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                  color: Colors.red,
+                                  width: 2.5,
+                                ),
+                              ),
+                            ),
+                            keyboardType: TextInputType.visiblePassword,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => _verifyPassword(),
+                            enabled: !_isVerifying,
                           ),
-                          decoration: InputDecoration(
-                            hintText: "Enter password",
-                            hintStyle: TextStyle(
-                              color: Colors.grey.shade400,
-                              fontSize: 16,
-                            ),
-                            prefixIcon: const Icon(Icons.password_rounded),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _obscurePassword
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
-                              ),
-                              onPressed: () {
-                                if (!mounted) return;
-                                setState(() => _obscurePassword = !_obscurePassword);
-                              },
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(
-                                color: _isError ? Colors.red : Colors.blueAccent,
-                                width: 2,
-                              ),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(
-                                color: _isError
-                                    ? Colors.red.shade300
-                                    : Colors.grey.shade400,
-                                width: 1.5,
-                              ),
-                            ),
-                            errorBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(
-                                color: Colors.red,
-                                width: 2,
-                              ),
-                            ),
-                            focusedErrorBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(
-                                color: Colors.red,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                          onSubmitted: (_) => _verifyPassword(),
                         ),
                       ),
 
@@ -430,7 +460,7 @@ class _OTPScreenState extends State<OTPScreen>
                       // Verify Button
                       SizedBox(
                         width: double.infinity,
-                        height: 50,
+                        height: 52,
                         child: ElevatedButton.icon(
                           onPressed: _isVerifying ? null : _verifyPassword,
                           icon: _isVerifying
@@ -442,21 +472,26 @@ class _OTPScreenState extends State<OTPScreen>
                                     color: Colors.white,
                                   ),
                                 )
-                              : const Icon(Icons.verified_user),
+                              : const Icon(Icons.verified_user, size: 22),
                           label: Text(
                             _isVerifying
                                 ? "Verifying..."
                                 : (widget.forResults
                                     ? "Verify & View Results"
                                     : "Verify & Start Exam"),
-                            style: const TextStyle(fontSize: 16),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.blueAccent.shade700,
+                            foregroundColor: Colors.white,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
                             elevation: 4,
+                            disabledBackgroundColor: Colors.grey.shade400,
                           ),
                         ),
                       ),
@@ -465,13 +500,21 @@ class _OTPScreenState extends State<OTPScreen>
                       
                       // Back Button
                       TextButton.icon(
-                        onPressed: () {
-                          if (mounted) {
-                            Navigator.pop(context);
-                          }
-                        },
-                        icon: const Icon(Icons.arrow_back),
-                        label: const Text("Back to Dashboard"),
+                        onPressed: _isVerifying
+                            ? null
+                            : () {
+                                if (mounted) {
+                                  Navigator.pop(context);
+                                }
+                              },
+                        icon: const Icon(Icons.arrow_back, size: 20),
+                        label: const Text(
+                          "Back to Dashboard",
+                          style: TextStyle(fontSize: 15),
+                        ),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.blueAccent.shade700,
+                        ),
                       ),
                     ],
                   ),
