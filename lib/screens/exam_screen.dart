@@ -228,10 +228,10 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// Initialize questions after loading (shuffle, create focus nodes)
+  /// Initialize questions after loading (shuffle texts only, create focus nodes)
   void _initializeQuestions() {
     if (_disposed) return;
-    
+
     if (kDebugMode) {
       debugPrint('🔧 Initializing ${questions.length} questions');
     }
@@ -241,21 +241,37 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
         debugPrint('  Q[${q['id']}]: type=${q['type']}, choices=${q['choices']?.length ?? 0}, marks=${q['marks']}');
       }
 
-      // Shuffle MCQ choices (preserving key-value pairs)
+      // Shuffle only the texts (keep static letter keys like A, B, C, D)
       if (q['type'] == 'mcq' && q['choices'] != null) {
-        q['choices'] = List<Map<String, String>>.from(q['choices'])..shuffle();
+        final choices = List<Map<String, String>>.from(q['choices']);
+
+        // Extract only the answer texts
+        final texts = choices.map((opt) => opt['text'] ?? '').toList();
+
+        // Shuffle the texts
+        texts.shuffle();
+
+        // Reassign shuffled texts to the same letter keys
+        for (int i = 0; i < choices.length; i++) {
+          choices[i]['text'] = texts[i];
+        }
+
+        q['choices'] = choices;
+
         if (kDebugMode) {
-          debugPrint('    ✓ Shuffled ${q['choices'].length} choices');
+          debugPrint('    ✓ Shuffled texts only for ${choices.length} choices (keys remain static)');
         }
       }
     }
 
-    // Shuffle questions
+    // Shuffle the order of questions (optional, can disable if not desired)
     questions.shuffle();
+
     if (kDebugMode) {
-      debugPrint('✅ Questions initialized and shuffled');
+      debugPrint('✅ Questions initialized and shuffled (texts only for MCQs)');
     }
   }
+
 
   Future<void> _secureExamEnvironment() async {
     if (_disposed) return;
