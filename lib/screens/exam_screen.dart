@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_windowmanager/flutter_windowmanager.dart';
-import 'package:http/http.dart' as http;
 import '../services/api_service.dart';
 import 'student_dashboard.dart';
 
@@ -70,9 +68,7 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
   bool showSuspiciousBanner = false;
   bool _isWarningDialogVisible = false;
   bool _isExamPausedOverlayVisible = false;
-  int _backgroundExitCount = 0;
   int _exitCount = 0;
-  int _lastHandledBackgroundCount = 0;
   int _currentQuestionIndex = 0;
 
   // Exam attempt tracking

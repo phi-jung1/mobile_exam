@@ -788,7 +788,7 @@ class ApiService {
               debugPrint('      Converting List to choices with keys...');
               choices = [];
               for (int i = 0; i < rawOptions.length; i++) {
-                choices!.add({
+                choices.add({
                   'key': String.fromCharCode(65 + i), // A, B, C, D...
                   'text': rawOptions[i].toString(),
                 });
@@ -811,7 +811,7 @@ class ApiService {
                 final displayKey = int.tryParse(key.toString()) != null 
                     ? String.fromCharCode(65 + int.parse(key.toString())) 
                     : key.toString();
-                choices!.add({
+                choices.add({
                   'key': displayKey,
                   'text': rawOptions[key].toString(),
                 });
