@@ -570,8 +570,8 @@ class ApiService {
     }
   }
 
-  /// Get exam attempt results
-/// Now with better response parsing and debugging
+/// Get exam attempt results
+/// Now properly parses backend's 'results' array format
 static Future<Map<String, dynamic>?> fetchExamResults({
   required int attemptId,
 }) async {
@@ -599,71 +599,104 @@ static Future<Map<String, dynamic>?> fetchExamResults({
       }
       
       if (data['results'] != null) {
-        debugPrint('📦 Results data found');
-        debugPrint('   Results keys: ${data['results'].keys.toList()}');
+        debugPrint('📦 Results array found with ${data['results'].length} items');
       }
       
       if (data['statistics'] != null) {
         debugPrint('📦 Statistics data found');
       }
       
-      // ✅ Check multiple possible locations for questions and answers
-      List<dynamic>? questionsData;
-      Map<String, dynamic>? answersData;
+      // ✅ CRITICAL FIX: Parse the 'results' array from backend
+      List<Map<String, dynamic>> questionsData = [];
+      Map<String, dynamic> answersData = {};
       
-      // Try different possible locations in the response
-      if (data['questions'] != null) {
-        questionsData = data['questions'] as List?;
-        debugPrint('   ✓ Found questions at root level: ${questionsData?.length ?? 0} items');
-      } else if (data['results']?['questions'] != null) {
-        questionsData = data['results']['questions'] as List?;
-        debugPrint('   ✓ Found questions in results object: ${questionsData?.length ?? 0} items');
-      } else if (data['attempt']?['questions'] != null) {
-        questionsData = data['attempt']['questions'] as List?;
-        debugPrint('   ✓ Found questions in attempt object: ${questionsData?.length ?? 0} items');
-      } else if (data['exam']?['questions'] != null) {
-        questionsData = data['exam']['questions'] as List?;
-        debugPrint('   ✓ Found questions in exam object: ${questionsData?.length ?? 0} items');
+      if (data['results'] != null && data['results'] is List) {
+        debugPrint('🔄 Processing results array...');
+        
+        for (var resultItem in data['results']) {
+          if (resultItem is! Map) continue;
+          
+          // Each result item contains both question and answer data
+          final questionId = resultItem['id']?.toString() ?? 
+                            'item_${resultItem['itemId']}';
+          
+          // Build question object
+          final question = {
+            'id': questionId,
+            'itemId': resultItem['itemId'],
+            'sectionId': resultItem['sectionId'],
+            'sectionTitle': resultItem['sectionTitle'],
+            'type': resultItem['type'],
+            'originalType': resultItem['originalType'],
+            'question': resultItem['question'],
+            'choices': resultItem['choices'],
+            'correct': resultItem['correctAnswer'], // ✅ From backend
+            'correctAnswer': resultItem['correctAnswer'],
+            'marks': resultItem['maxPoints'],
+            'maxPoints': resultItem['maxPoints'],
+            'pointsAwarded': resultItem['pointsAwarded'],
+            'isCorrect': resultItem['isCorrect'],
+            'order': resultItem['order'] ?? 0,
+          };
+          
+          // Add directions if available
+          if (resultItem['directions'] != null) {
+            question['directions'] = resultItem['directions'];
+          }
+          
+          // Add feedback if available
+          if (resultItem['feedback'] != null) {
+            question['feedback'] = resultItem['feedback'];
+          }
+          
+          questionsData.add(question);
+          
+          // Extract student answer
+          if (resultItem['studentAnswer'] != null) {
+            answersData[questionId] = resultItem['studentAnswer'];
+          }
+        }
+        
+        debugPrint('✅ Parsed ${questionsData.length} questions from results array');
+        debugPrint('✅ Extracted ${answersData.length} answers');
       }
       
-      // Try different possible locations for answers
-      if (data['answers'] != null) {
-        answersData = data['answers'] as Map<String, dynamic>?;
-        debugPrint('   ✓ Found answers at root level: ${answersData?.length ?? 0} items');
-      } else if (data['results']?['answers'] != null) {
-        answersData = data['results']['answers'] as Map<String, dynamic>?;
-        debugPrint('   ✓ Found answers in results object: ${answersData?.length ?? 0} items');
-      } else if (data['attempt']?['answers'] != null) {
-        answersData = data['attempt']['answers'] as Map<String, dynamic>?;
-        debugPrint('   ✓ Found answers in attempt object: ${answersData?.length ?? 0} items');
-      } else if (data['studentAnswers'] != null) {
-        answersData = data['studentAnswers'] as Map<String, dynamic>?;
-        debugPrint('   ✓ Found answers as studentAnswers: ${answersData?.length ?? 0} items');
+      // ✅ Fallback: Try legacy format if results array is empty
+      if (questionsData.isEmpty) {
+        debugPrint('⚠️ Results array empty, trying legacy format...');
+        
+        if (data['questions'] != null) {
+          questionsData = (data['questions'] as List)
+              .map((q) => Map<String, dynamic>.from(q))
+              .toList();
+          debugPrint('   ✓ Found questions at root level: ${questionsData.length} items');
+        }
+        
+        if (data['answers'] != null) {
+          answersData = Map<String, dynamic>.from(data['answers']);
+          debugPrint('   ✓ Found answers at root level: ${answersData.length} items');
+        }
       }
       
       // ✅ CRITICAL: Warn if no questions/answers found
-      if ((questionsData == null || questionsData.isEmpty) && 
-          (answersData == null || answersData.isEmpty)) {
-        debugPrint('⚠️ WARNING: API returned no questions or answers!');
-        debugPrint('   This means the backend is not including them in the response.');
-        debugPrint('   The app will fall back to cached data.');
-        debugPrint('   To fix this, update your backend results endpoint.');
+      if (questionsData.isEmpty && answersData.isEmpty) {
+        debugPrint('⚠️ WARNING: No questions or answers found in API response!');
+        debugPrint('   Response structure: ${data.keys.toList()}');
       }
       
       // ✅ Normalize the response format for the app
       final normalizedResponse = {
         'attempt': data['attempt'],
-        'questions': questionsData ?? [],
-        'answers': answersData ?? {},
-        'results': data['results'],
+        'questions': questionsData,
+        'answers': answersData,
+        'results': data['results'], // Keep original for reference
         'statistics': data['statistics'],
         'flagged': data['flagged'] ?? data['attempt']?['flagged'] ?? false,
       };
       
       debugPrint('✅ Results loaded from API');
-      debugPrint('   Response keys: ${normalizedResponse.keys.toList()}');
-      debugPrint('   Questions: ${(normalizedResponse['questions'] as List).length}');
-      debugPrint('   Answers: ${(normalizedResponse['answers'] as Map).length}');
+      debugPrint('   Questions: ${questionsData.length}');
+      debugPrint('   Answers: ${answersData.length}');
       
       return normalizedResponse;
     } else if (response.statusCode == 400) {
