@@ -11,7 +11,6 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'services/api_service.dart';
 
-// ✅ ADDED: API Configuration
 class ApiConfig {
   static const String baseUrl = 'https://yourserver.com';
   static const String submitEndpoint = '/api/exam/submit';
@@ -25,20 +24,15 @@ Future<void> main() async {
     await Hive.initFlutter();
     await Hive.openBox('examBox');
     
-    // ✅ Initialize authentication token from storage
     await ApiService.initializeAuth();
-    
-    // ✅ Run auto-sync at app startup with error handling
     await autoSyncPendingExams();
     
-    // ✅ FIXED: Listen for network reconnect with error handling and debouncing
     DateTime? lastSyncAttempt;
     Connectivity().onConnectivityChanged.listen((results) {
       try {
         final result = results.isNotEmpty ? results.first : ConnectivityResult.none;
         
         if (result != ConnectivityResult.none) {
-          // ✅ Debounce sync attempts (prevent rapid retries)
           final now = DateTime.now();
           if (lastSyncAttempt != null && 
               now.difference(lastSyncAttempt!).inSeconds < 30) {
@@ -49,7 +43,6 @@ Future<void> main() async {
           lastSyncAttempt = now;
           debugPrint('🌐 Network reconnected — syncing pending exams...');
           
-          // ✅ Run sync in separate zone to catch errors
           autoSyncPendingExams().catchError((error) {
             debugPrint('⚠️ Auto-sync error on reconnect: $error');
           });
@@ -64,7 +57,6 @@ Future<void> main() async {
     debugPrint('❌ Fatal error during app initialization: $e');
     debugPrint('Stack trace: $stackTrace');
     
-    // ✅ Show error screen instead of crashing
     runApp(MaterialApp(
       home: Scaffold(
         body: Center(
@@ -109,7 +101,6 @@ class MyApp extends StatelessWidget {
           final studentId = args?['studentId'] as String? ?? '';
           final studentName = args?['studentName'] as String?;
           
-          // ✅ ADDED: Validation
           if (studentId.isEmpty) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               Navigator.pushReplacementNamed(context, '/login');
@@ -132,6 +123,7 @@ class MyApp extends StatelessWidget {
           final expectedOTP = args?['expectedOTP'] as String?;
           final forResults = args?['forResults'] as bool? ?? false;
           final onVerified = args?['onVerified'] as VoidCallback?;
+          final attemptId = args?['attemptId'] as String?;  // ✅ ADDED: Extract attemptId
 
           return OTPScreen(
             examId: examId,
@@ -140,6 +132,7 @@ class MyApp extends StatelessWidget {
             expectedOTP: expectedOTP,
             forResults: forResults,
             onVerified: onVerified,
+            attemptId: attemptId,  // ✅ ADDED: Pass attemptId to OTPScreen
           );
         },
         '/exam': (context) {
@@ -149,7 +142,6 @@ class MyApp extends StatelessWidget {
           final examId = args?['examId'] as String? ?? '';
           final assignmentId = args?['assignmentId'] as String?;
           
-          // ✅ ADDED: Validation
           if (studentId.isEmpty || examId.isEmpty) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               Navigator.pushReplacementNamed(context, '/dashboard', arguments: {
@@ -170,8 +162,9 @@ class MyApp extends StatelessWidget {
         },
         '/results': (context) {
           final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
+          // ✅ FIXED: Use attemptId parameter name (not examId)
           return ResultsScreen(
-            examId: args['examId'],
+            attemptId: args['attemptId'] ?? args['examId'],  // Fallback for compatibility
             studentId: args['studentId'],
             examTitle: args['examTitle'],
             subject: args['subject'],
@@ -182,7 +175,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// ✅ IMPROVED: Better error handling and timeout management
 Future<void> autoSyncPendingExams() async {
   try {
     final examBox = Hive.box('examBox');
@@ -196,7 +188,6 @@ Future<void> autoSyncPendingExams() async {
 
     debugPrint('🌐 Starting auto-sync for pending exams...');
 
-    // ✅ ADDED: Track sync statistics
     int successCount = 0;
     int failureCount = 0;
     int skippedCount = 0;
@@ -226,7 +217,6 @@ Future<void> autoSyncPendingExams() async {
 
           debugPrint('📡 Attempting sync for ${exam['examId']} (${exam['studentId']})...');
 
-          // ✅ FIXED: Use config constant and better timeout
           final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.submitEndpoint}');
           final response = await http
               .post(
@@ -246,7 +236,6 @@ Future<void> autoSyncPendingExams() async {
               );
 
           if (response.statusCode == 200) {
-            // ✅ Update same record using consistent key format
             await examBox.put(attemptKey, {
               ...exam,
               'synced': true,
@@ -259,7 +248,6 @@ Future<void> autoSyncPendingExams() async {
             debugPrint('❌ Auto-sync failed: ${response.statusCode} for ${exam['examId']}');
             failureCount++;
             
-            // ✅ ADDED: Mark with retry count
             final retryCount = (exam['syncRetryCount'] ?? 0) + 1;
             await examBox.put(attemptKey, {
               ...exam,

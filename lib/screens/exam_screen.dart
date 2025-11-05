@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -8,8 +9,38 @@ import 'package:flutter_windowmanager/flutter_windowmanager.dart';
 import '../services/api_service.dart';
 import 'student_dashboard.dart';
 
-/// 🌟 Fade navigation helper
-void navigateWithFade(BuildContext context, Widget destination) {
+Future<void> navigateWithFade(
+  BuildContext context, 
+  Widget destination, {
+  String? studentId,
+}) async {
+  // ✅ If navigating to dashboard, try to load name from Hive
+  if (destination is StudentDashboard && studentId != null) {
+    try {
+      final box = await Hive.openBox('loginBox');
+      final userJson = box.get('user');
+      
+      if (userJson != null && userJson is String) {
+        final user = jsonDecode(userJson);
+        final firstName = user['first_name'] ?? '';
+        final lastName = user['last_name'] ?? '';
+        final studentName = '$firstName $lastName'.trim();
+        
+        if (studentName.isNotEmpty) {
+          debugPrint('✅ Loaded student name for navigation: $studentName');
+          destination = StudentDashboard(
+            studentId: studentId,
+            studentName: studentName,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Could not load student name: $e');
+    }
+  }
+  
+  if (!context.mounted) return;
+  
   Navigator.of(context).pushAndRemoveUntil(
     PageRouteBuilder(
       pageBuilder: (context, animation, secondaryAnimation) => destination,
@@ -902,6 +933,7 @@ class _ExamScreenState extends State<ExamScreen> with WidgetsBindingObserver {
                 navigateWithFade(
                   context,
                   StudentDashboard(studentId: widget.studentId),
+                  studentId: widget.studentId,
                 );
               },
               style: ElevatedButton.styleFrom(
@@ -1281,7 +1313,10 @@ Future<void> _handleSplitScreenDetected() async {
   _saveLocalDataThrottled();
   
   final timerWasActive = _timer?.isActive ?? false;
+  final remainingTimeBeforePause = _remainingSeconds;
   _cancelTimer();
+
+   debugPrint("⏸️ Timer PAUSED at $remainingTimeBeforePause seconds");
   
   if (_exitCount >= 3) {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -1297,11 +1332,11 @@ Future<void> _handleSplitScreenDetected() async {
   
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     if (_disposed || !mounted) return;
-    await _showSplitScreenWarning(message, timerWasActive);
+    await _showSplitScreenWarning(message, timerWasActive, remainingTimeBeforePause);
   });
 }
 
-Future<void> _showSplitScreenWarning(String message, bool restartTimer) async {
+Future<void> _showSplitScreenWarning(String message, bool restartTimer, int savedTime) async {
   if (_disposed || !mounted || _isWarningDialogVisible || _isSplitScreenWarningVisible) return;
   
   _isWarningDialogVisible = true;
@@ -1400,9 +1435,10 @@ Future<void> _showSplitScreenWarning(String message, bool restartTimer) async {
     _isSplitScreenWarningVisible = false; // FIX: Reset flag
     
     if (!_disposed && !submitted && restartTimer) {
+      _remainingSeconds = savedTime;
       startTimer();
       if (kDebugMode) {
-        debugPrint("✅ Timer resumed after split screen warning");
+        debugPrint("▶️ Timer RESUMED at $_remainingSeconds seconds");
       }
     }
     
@@ -2264,6 +2300,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
     navigateWithFade(
       context,
       StudentDashboard(studentId: widget.studentId),
+      studentId: widget.studentId,
     );
   });
 }

@@ -145,7 +145,6 @@ class _LoginScreenState extends State<LoginScreen>
           await box.put('studentId', id);
           await box.put('password', password);
           await box.put('rememberMe', true);
-          await box.put('user', jsonEncode(user)); // Save user data
         } else {
           await box.delete('studentId');
           await box.delete('password');

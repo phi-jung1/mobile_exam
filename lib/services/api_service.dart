@@ -571,38 +571,124 @@ class ApiService {
   }
 
   /// Get exam attempt results
-  static Future<Map<String, dynamic>?> fetchExamResults({
-    required int attemptId,
-  }) async {
-    try {
-      final url = Uri.parse('$baseUrl/exam-attempts/$attemptId/results');
-      
-      final response = await http.get(
-        url,
-        headers: _getHeaders(),
-      ).timeout(timeout);
+/// Now with better response parsing and debugging
+static Future<Map<String, dynamic>?> fetchExamResults({
+  required int attemptId,
+}) async {
+  try {
+    final url = Uri.parse('$baseUrl/exam-attempts/$attemptId/results');
+    
+    debugPrint('📡 Fetching results from API for attempt: $attemptId');
+    debugPrint('   Student ID: (authenticated)');
+    
+    final response = await http.get(
+      url,
+      headers: _getHeaders(),
+    ).timeout(timeout);
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        debugPrint('✅ Fetched results for attempt: $attemptId');
-        return data;
-      } else if (response.statusCode == 400) {
-        final error = jsonDecode(response.body);
-        debugPrint('❌ ${error['message']}');
-        return {'error': error['message']};
-      } else if (response.statusCode == 403 || response.statusCode == 404) {
-        final error = jsonDecode(response.body);
-        debugPrint('❌ ${error['message']}');
-        return {'error': error['message']};
-      } else {
-        debugPrint('❌ Failed to fetch results: ${response.statusCode}');
-        return null;
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      
+      debugPrint('✅ Fetched results for attempt: $attemptId');
+      debugPrint('📦 Full API Response keys: ${data.keys.toList()}');
+      
+      // Debug the response structure
+      if (data['attempt'] != null) {
+        debugPrint('📦 Attempt data found');
+        debugPrint('   Attempt keys: ${data['attempt'].keys.toList()}');
       }
-    } catch (e) {
-      debugPrint('⚠️ Error fetching results: $e');
-      return null;
+      
+      if (data['results'] != null) {
+        debugPrint('📦 Results data found');
+        debugPrint('   Results keys: ${data['results'].keys.toList()}');
+      }
+      
+      if (data['statistics'] != null) {
+        debugPrint('📦 Statistics data found');
+      }
+      
+      // ✅ Check multiple possible locations for questions and answers
+      List<dynamic>? questionsData;
+      Map<String, dynamic>? answersData;
+      
+      // Try different possible locations in the response
+      if (data['questions'] != null) {
+        questionsData = data['questions'] as List?;
+        debugPrint('   ✓ Found questions at root level: ${questionsData?.length ?? 0} items');
+      } else if (data['results']?['questions'] != null) {
+        questionsData = data['results']['questions'] as List?;
+        debugPrint('   ✓ Found questions in results object: ${questionsData?.length ?? 0} items');
+      } else if (data['attempt']?['questions'] != null) {
+        questionsData = data['attempt']['questions'] as List?;
+        debugPrint('   ✓ Found questions in attempt object: ${questionsData?.length ?? 0} items');
+      } else if (data['exam']?['questions'] != null) {
+        questionsData = data['exam']['questions'] as List?;
+        debugPrint('   ✓ Found questions in exam object: ${questionsData?.length ?? 0} items');
+      }
+      
+      // Try different possible locations for answers
+      if (data['answers'] != null) {
+        answersData = data['answers'] as Map<String, dynamic>?;
+        debugPrint('   ✓ Found answers at root level: ${answersData?.length ?? 0} items');
+      } else if (data['results']?['answers'] != null) {
+        answersData = data['results']['answers'] as Map<String, dynamic>?;
+        debugPrint('   ✓ Found answers in results object: ${answersData?.length ?? 0} items');
+      } else if (data['attempt']?['answers'] != null) {
+        answersData = data['attempt']['answers'] as Map<String, dynamic>?;
+        debugPrint('   ✓ Found answers in attempt object: ${answersData?.length ?? 0} items');
+      } else if (data['studentAnswers'] != null) {
+        answersData = data['studentAnswers'] as Map<String, dynamic>?;
+        debugPrint('   ✓ Found answers as studentAnswers: ${answersData?.length ?? 0} items');
+      }
+      
+      // ✅ CRITICAL: Warn if no questions/answers found
+      if ((questionsData == null || questionsData.isEmpty) && 
+          (answersData == null || answersData.isEmpty)) {
+        debugPrint('⚠️ WARNING: API returned no questions or answers!');
+        debugPrint('   This means the backend is not including them in the response.');
+        debugPrint('   The app will fall back to cached data.');
+        debugPrint('   To fix this, update your backend results endpoint.');
+      }
+      
+      // ✅ Normalize the response format for the app
+      final normalizedResponse = {
+        'attempt': data['attempt'],
+        'questions': questionsData ?? [],
+        'answers': answersData ?? {},
+        'results': data['results'],
+        'statistics': data['statistics'],
+        'flagged': data['flagged'] ?? data['attempt']?['flagged'] ?? false,
+      };
+      
+      debugPrint('✅ Results loaded from API');
+      debugPrint('   Response keys: ${normalizedResponse.keys.toList()}');
+      debugPrint('   Questions: ${(normalizedResponse['questions'] as List).length}');
+      debugPrint('   Answers: ${(normalizedResponse['answers'] as Map).length}');
+      
+      return normalizedResponse;
+    } else if (response.statusCode == 400) {
+      final error = jsonDecode(response.body);
+      debugPrint('❌ ${error['message']}');
+      return {'error': error['message']};
+    } else if (response.statusCode == 403) {
+      final error = jsonDecode(response.body);
+      debugPrint('❌ Access denied: ${error['message']}');
+      return {'error': error['message']};
+    } else if (response.statusCode == 404) {
+      final error = jsonDecode(response.body);
+      debugPrint('❌ Not found: ${error['message']}');
+      return {'error': error['message'] ?? 'Exam attempt not found'};
+    } else {
+      debugPrint('❌ Failed to fetch results: ${response.statusCode}');
+      debugPrint('   Response body: ${response.body}');
+      return {'error': 'Failed to fetch results (status ${response.statusCode})'};
     }
+  } catch (e, stackTrace) {
+    debugPrint('⚠️ Error fetching results: $e');
+    debugPrint('   Stack: $stackTrace');
+    return {'error': 'Network error: $e'};
   }
+}
 
   // ------------------------ HELPER METHODS ------------------------
 

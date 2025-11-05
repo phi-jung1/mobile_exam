@@ -151,78 +151,88 @@ class _StudentDashboardState extends State<StudentDashboard>
 
   /// ✅ Fixed: Parallel fetch operations and consistent key format
   Future<void> _fetchExamsFromServer() async {
+  if (_disposed) return;
+  
+  try {
+    debugPrint('📡 Fetching exams from server...');
+    
+    // Fetch exams from API
+    final apiExams = await ApiService.fetchExams();
+    
     if (_disposed) return;
     
-    try {
-      debugPrint('📡 Fetching exams from server...');
-      
-      // Fetch exams from API
-      final apiExams = await ApiService.fetchExams();
-      
-      if (_disposed) return;
-      
-      debugPrint('📊 Received ${apiExams.length} exams from API');
-      
-      if (apiExams.isEmpty) {
-        debugPrint('⚠️ No exams returned from API, using cached data');
-        return;
-      }
-
-      debugPrint('✅ Processing ${apiExams.length} exams from server');
-
-      // ✅ Fixed: Use Future.wait for parallel operations instead of sequential awaits
-      final cacheOperations = <Future>[];
-      
-      for (var apiExam in apiExams) {
-        if (_disposed) return;
-        
-        final exam = ApiService.parseExamForApp(apiExam);
-        // ✅ Fixed: Consistent key format - always use widget.studentId
-        final metaKey = 'meta_${exam['examId']}_${widget.studentId}';
-        
-        if (kDebugMode) {
-          debugPrint('════════════════════════════════════════════════════════════');
-          debugPrint('💾 CACHING EXAM:');
-          debugPrint('   Title: ${exam['title']}');
-          debugPrint('   Exam ID: ${exam['examId']}');
-          debugPrint('   Assignment ID: ${exam['assignmentId']}');
-          debugPrint('   Cache Key: $metaKey');
-          debugPrint('   Available: ${exam['available']}');
-          debugPrint('   Submitted: ${exam['submitted']}');
-        }
-        
-        final cachedData = {
-          ...exam,
-          'recordType': 'exam',
-          'studentId': widget.studentId, // ✅ Always use widget.studentId
-          'attemptId': exam['attempt']?['attempt_id'],
-          'submitted': exam['submitted'],
-          'available': exam['available'],
-          'flagged': false,
-          'completedAt': exam['attempt']?['end_time'],
-          'questions': exam['questions'] ?? [],
-          'timestamp': DateTime.now().toIso8601String(), // ✅ Add timestamp for cleanup
-        };
-        
-        // Add to parallel operations
-        cacheOperations.add(examBox.put(metaKey, cachedData));
-      }
-
-      // ✅ Fixed: Execute all cache operations in parallel
-      await Future.wait(cacheOperations);
-      
-      if (_disposed) return;
-
-      if (mounted) {
-        setState(() {}); // refresh UI
-      }
-      
-      debugPrint('🔄 UI refreshed with ${apiExams.length} exams');
-    } catch (e) {
-      debugPrint('⚠️ Error fetching exams from server: $e');
-      // Fallback to cached data (already in Hive)
+    debugPrint('📊 Received ${apiExams.length} exams from API');
+    
+    if (apiExams.isEmpty) {
+      debugPrint('⚠️ No exams returned from API, using cached data');
+      return;
     }
+
+    debugPrint('✅ Processing ${apiExams.length} exams from server');
+
+    // ✅ Fixed: Use Future.wait for parallel operations instead of sequential awaits
+    final cacheOperations = <Future>[];
+    
+    for (var apiExam in apiExams) {
+      if (_disposed) return;
+      
+      final exam = ApiService.parseExamForApp(apiExam);
+      
+      // ✅ CRITICAL FIX: Extract attempt ID from the API response
+      int? attemptId;
+      if (apiExam['attempt'] != null && apiExam['attempt'] is Map) {
+        attemptId = apiExam['attempt']['attempt_id'];
+        debugPrint('   Found attempt ID: $attemptId for exam ${exam['examId']}');
+      }
+      
+      // ✅ Fixed: Consistent key format - always use widget.studentId
+      final metaKey = 'meta_${exam['examId']}_${widget.studentId}';
+      
+      if (kDebugMode) {
+        debugPrint('════════════════════════════════════════════════════════════');
+        debugPrint('💾 CACHING EXAM:');
+        debugPrint('   Title: ${exam['title']}');
+        debugPrint('   Exam ID: ${exam['examId']}');
+        debugPrint('   Assignment ID: ${exam['assignmentId']}');
+        debugPrint('   Attempt ID: $attemptId');  // ✅ Added
+        debugPrint('   Cache Key: $metaKey');
+        debugPrint('   Available: ${exam['available']}');
+        debugPrint('   Submitted: ${exam['submitted']}');
+      }
+      
+      final cachedData = {
+        ...exam,
+        'recordType': 'exam',
+        'studentId': widget.studentId, // ✅ Always use widget.studentId
+        'attemptId': attemptId,  // ✅ CRITICAL: Store attempt ID
+        'attempt': apiExam['attempt'],  // ✅ Store full attempt object for reference
+        'submitted': exam['submitted'],
+        'available': exam['available'],
+        'flagged': false,
+        'completedAt': exam['attempt']?['end_time'],
+        'questions': exam['questions'] ?? [],
+        'timestamp': DateTime.now().toIso8601String(), // ✅ Add timestamp for cleanup
+      };
+      
+      // Add to parallel operations
+      cacheOperations.add(examBox.put(metaKey, cachedData));
+    }
+
+    // ✅ Fixed: Execute all cache operations in parallel
+    await Future.wait(cacheOperations);
+    
+    if (_disposed) return;
+
+    if (mounted) {
+      setState(() {}); // refresh UI
+    }
+    
+    debugPrint('🔄 UI refreshed with ${apiExams.length} exams');
+  } catch (e) {
+    debugPrint('⚠️ Error fetching exams from server: $e');
+    // Fallback to cached data (already in Hive)
   }
+}
 
   Future<void> _initConnectivity() async {
     final results = await Connectivity().checkConnectivity();
@@ -642,6 +652,10 @@ class AnimatedConnectivityBanner extends StatelessWidget {
   }
 }
 
+// Only showing the critical part that needs to be fixed in ExamList class
+
+// Only the critical part that needs to be fixed in ExamList class
+
 class ExamList extends StatelessWidget {
   final List<Map> exams;
   final String studentId;
@@ -664,16 +678,21 @@ class ExamList extends StatelessWidget {
     required bool forResults,
     required String examPassword,
     required int numericExamId,
+    int? attemptId,
   }) {
     debugPrint('🔒 Navigating to OTP screen:');
     debugPrint('   Exam ID (numeric): $numericExamId');
+    if (attemptId != null) {
+      debugPrint('   Attempt ID: $attemptId');
+    }
     debugPrint('   Student ID: $studentId (type: ${studentId.runtimeType})');
     
     Navigator.pushNamed(context, '/otp', arguments: {
       'subject': subject,
       'forResults': forResults,
       'studentId': studentId,
-      'examId': numericExamId.toString(),
+      'examId': numericExamId.toString(),  // ✅ For password verification
+      'attemptId': attemptId?.toString(),  // ✅ For results screen navigation
       'onVerified': () => Navigator.pushNamed(context, route, arguments: arguments),
     });
   }
@@ -727,9 +746,40 @@ class ExamList extends StatelessWidget {
           }
 
           final route = completed ? '/results' : '/exam';
+          
+          // ✅ CRITICAL FIX: Extract attempt ID from the attempt object
+          int? attemptIdForResults;
+          if (completed) {
+            // Try multiple possible locations for attempt ID
+            if (exam['attempt'] != null && exam['attempt'] is Map) {
+              // From attempt object
+              attemptIdForResults = exam['attempt']['attempt_id'];
+            } else if (exam['attemptId'] != null) {
+              // From top-level field
+              attemptIdForResults = exam['attemptId'] is int 
+                  ? exam['attemptId'] 
+                  : int.tryParse(exam['attemptId'].toString());
+            }
+            
+            debugPrint('📊 Extracted attempt ID for results: $attemptIdForResults');
+            debugPrint('   From exam data: ${exam['attempt']}');
+            
+            if (attemptIdForResults == null) {
+              debugPrint('⚠️ WARNING: No attempt ID found in exam data!');
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("❌ Cannot view results: Missing attempt information"),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+              return;
+            }
+          }
+          
           final arguments = completed
               ? {
-                  'examId': numericExamId.toString(),
+                  'attemptId': attemptIdForResults?.toString() ?? '',  // ✅ Pass attemptId
                   'studentId': studentId,
                   'examTitle': examTitle,
                   'subject': subject,
@@ -750,7 +800,8 @@ class ExamList extends StatelessWidget {
               arguments: arguments,
               forResults: completed,
               examPassword: examPassword,
-              numericExamId: numericExamId,
+              numericExamId: numericExamId,  // ✅ Exam ID for password verification
+              attemptId: attemptIdForResults,  // ✅ Attempt ID for results navigation
             );
           } else {
             Navigator.pushNamed(context, route, arguments: arguments);
@@ -787,7 +838,6 @@ class ExamList extends StatelessWidget {
                   onTap: onButtonPressed,
                   child: Row(
                     children: [
-                      // Gradient side strip
                       Container(
                         width: 8,
                         height: 140,

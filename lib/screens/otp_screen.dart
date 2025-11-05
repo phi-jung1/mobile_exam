@@ -12,6 +12,7 @@ class OTPScreen extends StatefulWidget {
   final bool forResults;
   final String studentId;
   final VoidCallback? onVerified;
+  final String? attemptId;  // ✅ This should contain the actual attempt ID for results
 
   const OTPScreen({
     super.key,
@@ -21,6 +22,7 @@ class OTPScreen extends StatefulWidget {
     this.forResults = false,
     required this.studentId,
     this.onVerified,
+    this.attemptId,  // ✅ Pass attempt ID when navigating to results
   });
 
   @override
@@ -160,16 +162,49 @@ class _OTPScreenState extends State<OTPScreen>
 
       // Navigate to appropriate screen
       if (widget.forResults) {
+        // ✅ CRITICAL FIX: Use attemptId parameter, not examId
+        if (widget.attemptId == null || widget.attemptId!.isEmpty) {
+          if (kDebugMode) {
+            debugPrint('⚠️ WARNING: No attempt ID provided for results screen!');
+            debugPrint('   Exam ID: ${widget.examId}');
+            debugPrint('   This will likely cause "Exam attempt not found" error');
+          }
+          
+          _showFloatingMessage(
+            message: "❌ Cannot load results: Missing attempt information",
+            success: false,
+          );
+          
+          if (mounted && !_disposed) {
+            setState(() => _isVerifying = false);
+          }
+          return;
+        }
+        
+        if (kDebugMode) {
+          debugPrint('📊 Navigating to results screen:');
+          debugPrint('   Attempt ID: ${widget.attemptId}');
+          debugPrint('   Student ID: ${widget.studentId}');
+        }
+        
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (context) => ResultsScreen(
-              examId: widget.examId,
+              attemptId: widget.attemptId!,  // ✅ Use attemptId parameter name
               studentId: widget.studentId,
+              examTitle: widget.subject,
             ),
           ),
         );
       } else {
+        // Starting exam - use exam ID
+        if (kDebugMode) {
+          debugPrint('📝 Starting exam:');
+          debugPrint('   Exam ID: ${widget.examId}');
+          debugPrint('   Student ID: ${widget.studentId}');
+        }
+        
         // If onVerified callback is provided, use it
         if (widget.onVerified != null) {
           widget.onVerified!();
