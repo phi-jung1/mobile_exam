@@ -2210,3 +2210,132 @@ class _QuestionWidgetState extends State<QuestionWidget>
   @override
   bool get wantKeepAlive => true;
 }
+
+// ------------------------ REVIEW SCREEN ------------------------
+
+class ReviewScreen extends StatefulWidget {
+  final Duration duration;
+  final Map<String, dynamic> studentAnswers;
+  final Set<String> flaggedQuestions;
+  final List<Map<String, dynamic>> questions;
+  final bool flagged;
+  final String studentId;
+
+  const ReviewScreen({
+    super.key,
+    required this.duration,
+    required this.studentAnswers,
+    required this.flaggedQuestions,
+    required this.questions,
+    required this.flagged,
+    required this.studentId,
+  });
+
+  @override
+  State<ReviewScreen> createState() => _ReviewScreenState();
+}
+
+class _ReviewScreenState extends State<ReviewScreen> {
+  late int remainingSeconds;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    remainingSeconds = widget.duration.inSeconds;
+    _startTimer();
+  }
+
+  void _startTimer() {
+    _cancelTimer();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (remainingSeconds <= 0) _finishReview();
+      else setState(() => remainingSeconds--);
+    });
+  }
+
+  void _cancelTimer() => _timer?.cancel();
+
+  Future<void> _finishReview() async {
+  _cancelTimer();
+  if (!mounted) return;
+
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    navigateWithFade(
+      context,
+      StudentDashboard(studentId: widget.studentId),
+    );
+  });
+}
+
+
+  String formatTime(int totalSeconds) {
+    final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Review Period")),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(
+              "You have ${formatTime(remainingSeconds)} to review your answers.",
+              style: TextStyle(
+                fontSize: 18,
+                color: remainingSeconds <= 60 ? Colors.red : Colors.black,
+              ),
+            ),
+          ),
+
+          // ⚠️ Suspicious activity banner
+          if (widget.flagged)
+            Container(
+              width: double.infinity,
+              color: Colors.redAccent,
+              padding: const EdgeInsets.all(8),
+              child: const Text(
+                "⚠️ Warning: App interruption detected during the exam. Your exam may have been auto-submitted if repeated.",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+            ),
+
+          Expanded(
+            child: ListView(
+              children: widget.questions.map((q) {
+                final isFlagged = widget.flaggedQuestions.contains(q['id']);
+                return Card(
+                  margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                  child: ListTile(
+                    title: Row(
+                      children: [
+                        Expanded(child: Text(q['question'])),
+                        if (isFlagged)
+                          const Icon(Icons.flag, color: Colors.orange, size: 18),
+                      ],
+                    ),
+                    subtitle: Text(
+                        "Answer: ${widget.studentAnswers[q['id']] ?? 'No answer'}"),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: ElevatedButton(
+              onPressed: _finishReview,
+              child: const Text("Finish Review Now"),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
