@@ -754,6 +754,8 @@ class ExamList extends StatelessWidget {
             if (exam['attempt'] != null && exam['attempt'] is Map) {
               // From attempt object
               attemptIdForResults = exam['attempt']['attempt_id'];
+
+              debugPrint('📊 Found attempt ID in attempt object: $attemptIdForResults');
             } else if (exam['attemptId'] != null) {
               // From top-level field
               attemptIdForResults = exam['attemptId'] is int 
@@ -762,10 +764,12 @@ class ExamList extends StatelessWidget {
             }
             
             debugPrint('📊 Extracted attempt ID for results: $attemptIdForResults');
-            debugPrint('   From exam data: ${exam['attempt']}');
             
             if (attemptIdForResults == null) {
               debugPrint('⚠️ WARNING: No attempt ID found in exam data!');
+              debugPrint('   Exam keys: ${exam.keys.toList()}');
+              debugPrint('   Attempt data: ${exam['attempt']}');
+              debugPrint('   AttemptId field: ${exam['attemptId']}');
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text("❌ Cannot view results: Missing attempt information"),

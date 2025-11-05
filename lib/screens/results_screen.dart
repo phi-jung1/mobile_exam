@@ -262,109 +262,126 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   Future<void> _loadExamResultsFromCache() async {
-    if (_disposed || !mounted) return;
+  if (_disposed || !mounted) return;
 
-    try {
-      if (kDebugMode) {
-        debugPrint('💾 Loading results from cache...');
-        debugPrint('   Attempt ID: ${widget.attemptId}');
-        debugPrint('   Student ID: ${widget.studentId}');
-      }
+  try {
+    if (kDebugMode) {
+      debugPrint('💾 Loading results from cache...');
+      debugPrint('   Attempt ID: ${widget.attemptId}');
+      debugPrint('   Student ID: ${widget.studentId}');
+    }
+    
+    final allKeys = examBox.keys.cast<String>().toList();
+    String? matchingKey;
+    
+    // ✅ NEW Strategy: Search all exam records for matching attemptId
+    for (var key in allKeys) {
+      final record = examBox.get(key);
+      if (record is! Map) continue;
       
-      final allKeys = examBox.keys.cast<String>();
+      // Match by attemptId in the record
+      final recordAttemptId = record['attemptId']?.toString() ?? 
+                             record['attempt']?['attempt_id']?.toString();
       
-      // ✅ Strategy 1: Try to find by attempt ID
-      String? matchingKey;
-      
-      // First, try direct attempt key
-      final attemptKey = 'attempt_${widget.attemptId}';
-      if (examBox.containsKey(attemptKey)) {
-        matchingKey = attemptKey;
+      if (recordAttemptId == widget.attemptId && 
+          record['studentId'] == widget.studentId &&
+          record['submitted'] == true) {
+        matchingKey = key;
         if (kDebugMode) {
-          debugPrint('   ✓ Found direct attempt key: $attemptKey');
+          debugPrint('   ✓ Found matching record: $key');
+          debugPrint('   Attempt ID in record: $recordAttemptId');
         }
+        break;
       }
-      
-      // ✅ Strategy 2: Search for matching attempt in all records
-      if (matchingKey == null) {
-        for (var key in allKeys) {
-          final record = examBox.get(key);
-          if (record is! Map) continue;
-          
-          final recordAttemptId = record['attemptId']?.toString();
-          final recordSubmitted = record['submitted'] == true;
-          
-          if (recordAttemptId == widget.attemptId && recordSubmitted) {
-            matchingKey = key;
-            if (kDebugMode) {
-              debugPrint('   ✓ Found matching cache key: $key');
-            }
-            break;
+    }
+
+    if (matchingKey == null) {
+      if (kDebugMode) {
+        debugPrint('⚠️ No matching cached results found');
+        
+        // Debug: Show what we have
+        final relevantKeys = allKeys
+            .where((k) => k.contains(widget.studentId))
+            .toList();
+        debugPrint('   Keys for this student: ${relevantKeys.take(3).join(", ")}');
+        
+        // Show attempt IDs we found
+        for (var key in relevantKeys.take(3)) {
+          final rec = examBox.get(key);
+          if (rec is Map) {
+            final aid = rec['attemptId']?.toString() ?? 
+                       rec['attempt']?['attempt_id']?.toString() ?? 'none';
+            debugPrint('   $key -> attemptId: $aid');
           }
         }
       }
-
-      if (matchingKey == null) {
-        if (kDebugMode) {
-          debugPrint('⚠️ No matching cached results found');
-          debugPrint('   Available keys: ${allKeys.take(10).join(", ")}...');
-        }
-        if (_disposed || !mounted) return;
-        setState(() {
-          loaded = true;
-          errorMessage = errorMessage ?? "Results not available offline. Please check your connection.";
-        });
-        return;
-      }
-
-      final cachedAttempt = Map<String, dynamic>.from(examBox.get(matchingKey));
       
-      if (kDebugMode) {
-        debugPrint('✅ Using cached attempt from key: $matchingKey');
-        debugPrint('   Has questions: ${cachedAttempt['questions'] != null}');
-        debugPrint('   Has answers: ${cachedAttempt['answers'] != null}');
-      }
-
-      if (_disposed || !mounted) return;
-
-      setState(() {
-        final rawAnswers = cachedAttempt['answers'] ?? cachedAttempt['studentAnswers'] ?? {};
-        studentAnswers = Map<String, dynamic>.from(rawAnswers);
-        
-        final rawQuestions = cachedAttempt['questions'] ?? [];
-        questions = (rawQuestions as List).map((q) => Map<String, dynamic>.from(q)).toList();
-        
-        // Use cached score if API didn't provide it
-        if (score == null) {
-          score = cachedAttempt['score'];
-          totalMarks = cachedAttempt['totalMarks'];
-        }
-        
-        flagged = cachedAttempt['flagged'] ?? false;
-        loaded = true;
-        errorMessage = null;
-      });
-      
-      if (kDebugMode) {
-        debugPrint('✅ Loaded from cache: ${questions.length} questions, ${studentAnswers.length} answers');
-        debugPrint('   Score: $score / $totalMarks');
-      }
-      
-      if (mounted) {
-        _showSnack("📱 Results loaded from offline cache");
-      }
-    } catch (e, stackTrace) {
-      if (kDebugMode) {
-        debugPrint('⚠️ Error loading from cache: $e');
-        debugPrint('   Stack: $stackTrace');
-      }
       if (_disposed || !mounted) return;
       setState(() {
         loaded = true;
-        errorMessage = errorMessage ?? "Failed to load results.";
+        errorMessage = errorMessage ?? 
+            "Results not available offline. Please check your connection and try again.";
       });
+      return;
     }
+
+    // ✅ Load from matched cache
+    final cachedRecord = Map<String, dynamic>.from(examBox.get(matchingKey));
+    
+    if (kDebugMode) {
+      debugPrint('✅ Using cached record from: $matchingKey');
+    }
+
+    if (_disposed || !mounted) return;
+
+    setState(() {
+      // Extract answers - could be in multiple locations
+      final rawAnswers = cachedRecord['answers'] ?? 
+                        cachedRecord['studentAnswers'] ?? 
+                        cachedRecord['attempt']?['answers'] ?? {};
+      studentAnswers = Map<String, dynamic>.from(rawAnswers);
+      
+      // Extract questions
+      final rawQuestions = cachedRecord['questions'] ?? 
+                          cachedRecord['attempt']?['questions'] ?? [];
+      questions = (rawQuestions as List)
+          .map((q) => Map<String, dynamic>.from(q))
+          .toList();
+      
+      // Extract score
+      score = cachedRecord['score'] ?? 
+             cachedRecord['attempt']?['score'];
+      totalMarks = cachedRecord['totalMarks'] ?? 
+                  cachedRecord['total_marks'] ??
+                  cachedRecord['attempt']?['total_marks'];
+      
+      flagged = cachedRecord['flagged'] ?? false;
+      loaded = true;
+      errorMessage = null;
+    });
+    
+    if (kDebugMode) {
+      debugPrint('✅ Loaded from cache:');
+      debugPrint('   Questions: ${questions.length}');
+      debugPrint('   Answers: ${studentAnswers.length}');
+      debugPrint('   Score: $score${totalMarks != null ? " / $totalMarks" : ""}');
+    }
+    
+    if (mounted) {
+      _showSnack("📱 Results loaded from offline cache");
+    }
+  } catch (e, stackTrace) {
+    if (kDebugMode) {
+      debugPrint('⚠️ Error loading from cache: $e');
+      debugPrint('   Stack: $stackTrace');
+    }
+    if (_disposed || !mounted) return;
+    setState(() {
+      loaded = true;
+      errorMessage = errorMessage ?? "Failed to load results from cache.";
+    });
   }
+}
 
   void _checkAndPlayConfetti() {
     if (_disposed || !mounted || _confettiPlayed) return;
