@@ -10,7 +10,7 @@ class ApiService {
   //   - iOS Simulator: use 'http://localhost:8000/api'
   //   - Physical Device: use your computer's IP address, e.g., 'http://192.168.1.100:8000/api'
   // For production: use 'https://your-domain.com/api'
-  static const String baseUrl = 'http://127.0.0.1:8000/api';
+  static const String baseUrl = 'https://evelia-unulcerated-keiko.ngrok-free.dev/api';
   
   // Timeout duration for API calls
   static const Duration timeout = Duration(seconds: 10);
