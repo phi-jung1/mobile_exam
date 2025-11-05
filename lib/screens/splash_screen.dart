@@ -181,7 +181,7 @@ class _SplashScreenState extends State<SplashScreen>
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Text(isFirstHalf ? 'M' : 'M', style: textStyle),
+                              Text(isFirstHalf ? 'O' : 'M', style: textStyle),
                               Text('obe', style: textStyle),
                             ],
                           ),
