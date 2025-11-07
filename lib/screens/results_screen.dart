@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -15,7 +15,7 @@ Future<void> navigateToDashboard(BuildContext context, String studentId) async {
 enum FilterOption { all, correct, incorrect }
 
 class ResultsScreen extends StatefulWidget {
-  final String attemptId;  // ✅ This is now correct - attempt ID
+  final String attemptId;  // ✅ This is the attempt ID from the exam attempt
   final String studentId;
   final String? examTitle;
   final String? subject;
@@ -38,9 +38,18 @@ class _ResultsScreenState extends State<ResultsScreen>
   late final ScrollController _scrollController;
   late final ConfettiController _confettiController;
   late final AnimationController _animationController;
+  late final Animation<Offset> _slideAnimation;
+  late final Animation<double> _fadeAnimation;
 
+  // ✅ NEW: Use results array from API (contains isCorrect and points)
+  List<Map<String, dynamic>> results = [];
+  Map<String, dynamic>? statistics;
+  Map<String, dynamic>? attemptInfo;
+  
+  // Legacy support for cache
   Map<String, dynamic> studentAnswers = {};
   List<Map<String, dynamic>> questions = [];
+  
   bool flagged = false;
   bool loaded = false;
   bool showFAB = false;
@@ -50,21 +59,43 @@ class _ResultsScreenState extends State<ResultsScreen>
   String? errorMessage;
   int? score;
   int? totalMarks;
+  int correctCount = 0;
+  int incorrectCount = 0;
+  int unansweredCount = 0;
+
 
   @override
   void initState() {
     super.initState();
     examBox = Hive.box('examBox');
+    
     _scrollController = ScrollController()
       ..addListener(() {
         if (_disposed || !mounted) return;
         setState(() => showFAB = _scrollController.offset > 350);
       });
+    
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1000),
     );
-    _confettiController = ConfettiController(duration: const Duration(seconds: 3));
+    
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0, 0.4),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeOutCubic,
+    ));
+    
+    _fadeAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOut,
+    );
+    
+    _confettiController = ConfettiController(
+      duration: const Duration(seconds: 3),
+    );
     
     _loadExamResults();
   }
@@ -86,8 +117,8 @@ class _ResultsScreenState extends State<ResultsScreen>
     
     if (_disposed || !mounted) return;
 
-    // If API failed or returned no questions, try cache
-    if (!loadedFromAPI || questions.isEmpty) {
+    // If API failed or returned no data, try cache
+    if (!loadedFromAPI || (results.isEmpty && questions.isEmpty)) {
       if (kDebugMode) {
         debugPrint('⚠️ API load incomplete, trying local cache...');
       }
@@ -96,7 +127,7 @@ class _ResultsScreenState extends State<ResultsScreen>
     
     if (_disposed || !mounted) return;
 
-    if (loaded && questions.isNotEmpty) {
+    if (loaded && (results.isNotEmpty || questions.isNotEmpty)) {
       _animationController.forward();
       _checkAndPlayConfetti();
     }
@@ -107,7 +138,9 @@ class _ResultsScreenState extends State<ResultsScreen>
 
     try {
       if (kDebugMode) {
-        debugPrint('📡 Fetching results from API for attempt: ${widget.attemptId}');
+        debugPrint('═══════════════════════════════════════════════════════');
+        debugPrint('📡 LOADING RESULTS FROM API');
+        debugPrint('   Attempt ID: ${widget.attemptId}');
         debugPrint('   Student ID: ${widget.studentId}');
       }
       
@@ -119,130 +152,131 @@ class _ResultsScreenState extends State<ResultsScreen>
         return false;
       }
       
-      final results = await ApiService.fetchExamResults(attemptId: attemptId);
+      final apiResponse = await ApiService.fetchExamResults(attemptId: attemptId);
       
       if (_disposed || !mounted) return false;
 
-      if (results != null && results['error'] == null) {
+      if (apiResponse != null && apiResponse['error'] == null) {
         if (kDebugMode) {
           debugPrint('✅ API Response received');
-          debugPrint('   Response keys: ${results.keys.toList()}');
+          debugPrint('   Response keys: ${apiResponse.keys.toList()}');
         }
         
-        // ✅ Extract score and total marks from attempt data
-        if (results['attempt'] != null) {
-          score = results['attempt']['score'];
-          totalMarks = results['attempt']['total_marks'];
+        // ✅ Extract attempt info (score, total marks, etc.)
+        if (apiResponse['attempt'] != null) {
+          attemptInfo = Map<String, dynamic>.from(apiResponse['attempt']);
+          score = (attemptInfo!['score'] as num?)?.toInt();
+          totalMarks = (attemptInfo!['total_marks'] as num?)?.toInt();
+          flagged = attemptInfo!['flagged'] ?? false;
+          
           if (kDebugMode) {
-            debugPrint('   Score: $score / $totalMarks');
+            debugPrint('   📊 Attempt Info:');
+            debugPrint('      Score: $score / $totalMarks');
+            debugPrint('      Flagged: $flagged');
           }
         }
         
-        // Handle different API response formats
-        final questionsData = results['questions'] ?? 
-                             results['results']?['questions'] ??
-                             results['attempt']?['questions'] ?? 
-                             results['exam']?['questions'] ?? [];
-        
-        final answersData = results['answers'] ?? 
-                           results['results']?['answers'] ??
-                           results['attempt']?['answers'] ?? 
-                           results['studentAnswers'] ?? {};
-        
-        if (kDebugMode) {
-          debugPrint('   Questions found: ${questionsData is List ? questionsData.length : 0}');
-          debugPrint('   Answers found: ${answersData is Map ? answersData.length : 0}');
+        // ✅ Extract statistics (pre-calculated from backend)
+        if (apiResponse['statistics'] != null) {
+          statistics = Map<String, dynamic>.from(apiResponse['statistics']);
+          
+          // 🩹 FIX: safely convert any double values to int
+          correctCount = (statistics!['correctAnswers'] as num?)?.toInt() ?? 0;
+          incorrectCount = (statistics!['incorrectAnswers'] as num?)?.toInt() ?? 0;
+          unansweredCount = (statistics!['unanswered'] as num?)?.toInt() ?? 0;
+
+          if (kDebugMode) {
+            debugPrint('   📈 Statistics:');
+            debugPrint('      Correct: $correctCount');
+            debugPrint('      Incorrect: $incorrectCount');
+            debugPrint('      Unanswered: $unansweredCount');
+          }
         }
 
-        // ✅ If API doesn't return questions/answers, we'll use cache
-        if ((questionsData is! List || questionsData.isEmpty) && 
-            (answersData is! Map || answersData.isEmpty)) {
-          if (kDebugMode) {
-            debugPrint('⚠️ API returned no questions/answers, will use cache');
-          }
-          
-          // But keep the score from API
-          if (mounted) {
-            setState(() {
-              loaded = true;
-            });
-          }
-          return false; // Signal to load from cache
-        }
         
-        // Process questions
-        final processedQuestions = <Map<String, dynamic>>[];
-        if (questionsData is List) {
-          for (var q in questionsData) {
-            if (q is Map) {
-              final questionMap = Map<String, dynamic>.from(q);
-              
-              // Ensure ID field exists
-              if (questionMap['id'] == null) {
-                questionMap['id'] = questionMap['item_id']?.toString() ?? 
-                                   questionMap['question_id']?.toString() ?? 
-                                   'item_${processedQuestions.length}';
-              }
-              
-              // Map correct answer from multiple possible field names
-              if (questionMap['correct'] == null) {
-                questionMap['correct'] = questionMap['correct_answer'] ?? 
-                                        questionMap['answer'] ?? 
-                                        questionMap['correctAnswer'] ??
-                                        questionMap['correct_key'] ??
-                                        questionMap['answer_key'];
-              }
-              
-              // Convert choice keys to text for MCQ
-              if ((questionMap['type'] == 'mcq' || questionMap['type'] == 'true_false') && 
-                  questionMap['choices'] != null) {
-                final choices = questionMap['choices'];
-                if (choices is List && questionMap['correct'] != null) {
-                  final correctKey = questionMap['correct'].toString();
-                  final correctChoice = choices.firstWhere(
-                    (c) => c['key']?.toString().toLowerCase() == correctKey.toLowerCase(),
-                    orElse: () => null,
-                  );
-                  
-                  if (correctChoice != null) {
-                    questionMap['correct_text'] = correctChoice['text'];
-                  }
-                }
-              }
-              
-              processedQuestions.add(questionMap);
+        // ✅ CRITICAL: Extract results array (NEW API FORMAT)
+        if (apiResponse['results'] != null && apiResponse['results'] is List) {
+          results = List<Map<String, dynamic>>.from(apiResponse['results']);
+          
+          if (kDebugMode) {
+            debugPrint('   ✅ Results array found: ${results.length} items');
+            debugPrint('   Sample result structure:');
+            if (results.isNotEmpty) {
+              final sample = results[0];
+              debugPrint('      Keys: ${sample.keys.toList()}');
+              debugPrint('      Has isCorrect: ${sample.containsKey('isCorrect')}');
+              debugPrint('      Has pointsAwarded: ${sample.containsKey('pointsAwarded')}');
+              debugPrint('      Has correctAnswer: ${sample.containsKey('correctAnswer')}');
+              debugPrint('      correctAnswer value: ${sample['correctAnswer']}');
             }
           }
+          
+          // ✅ Also populate legacy structures for backward compatibility
+          questions = results.map((r) => {
+            'id': r['id'],
+            'itemId': r['itemId'],
+            'question': r['question'],
+            'type': r['type'],
+            'choices': r['choices'],
+            'correct': r['correctAnswer'], // May be null (hidden by backend)
+            'marks': r['maxPoints'],
+            'isCorrect': r['isCorrect'],
+            'pointsAwarded': r['pointsAwarded'],
+            'maxPoints': r['maxPoints'],
+          }).toList();
+          
+          studentAnswers = Map.fromEntries(
+            results.map((r) => MapEntry(
+              r['id'] as String,
+              r['studentAnswer'],
+            )),
+          );
+          
+          if (kDebugMode) {
+            debugPrint('   ✅ Converted to legacy format:');
+            debugPrint('      Questions: ${questions.length}');
+            debugPrint('      Answers: ${studentAnswers.length}');
+          }
         }
-        
-        // Process answers
-        final processedAnswers = <String, dynamic>{};
-        if (answersData is Map) {
-          answersData.forEach((key, value) {
-            processedAnswers[key.toString()] = value;
-          });
+        // Fallback to legacy format if results array not available
+        else {
+          if (kDebugMode) {
+            debugPrint('   ⚠️ No results array, trying legacy format...');
+          }
+          
+          if (apiResponse['questions'] != null && apiResponse['questions'] is List) {
+            questions = List<Map<String, dynamic>>.from(apiResponse['questions']);
+          }
+          
+          if (apiResponse['answers'] != null && apiResponse['answers'] is Map) {
+            studentAnswers = Map<String, dynamic>.from(apiResponse['answers']);
+          }
+          
+          if (kDebugMode) {
+            debugPrint('   📊 Legacy format:');
+            debugPrint('      Questions: ${questions.length}');
+            debugPrint('      Answers: ${studentAnswers.length}');
+          }
         }
         
         if (mounted) {
           setState(() {
-            studentAnswers = processedAnswers;
-            questions = processedQuestions;
-            flagged = results['flagged'] ?? results['attempt']?['flagged'] ?? false;
             loaded = true;
             errorMessage = null;
           });
         }
         
         if (kDebugMode) {
-          debugPrint('✅ Loaded ${questions.length} questions, ${studentAnswers.length} answers from API');
+          debugPrint('═══════════════════════════════════════════════════════');
         }
         
-        if (mounted && questions.isNotEmpty) {
+        if (mounted && (results.isNotEmpty || questions.isNotEmpty)) {
           _showSnack("✅ Results loaded from server!");
         }
-        return questions.isNotEmpty;
+        
+        return results.isNotEmpty || questions.isNotEmpty;
       } else {
-        final errorMsg = results?['error'] ?? 'No results available';
+        final errorMsg = apiResponse?['error'] ?? 'No results available';
         if (kDebugMode) {
           debugPrint('⚠️ API returned error: $errorMsg');
         }
@@ -262,132 +296,118 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   Future<void> _loadExamResultsFromCache() async {
-  if (_disposed || !mounted) return;
+    if (_disposed || !mounted) return;
 
-  try {
-    if (kDebugMode) {
-      debugPrint('💾 Loading results from cache...');
-      debugPrint('   Attempt ID: ${widget.attemptId}');
-      debugPrint('   Student ID: ${widget.studentId}');
-    }
-    
-    final allKeys = examBox.keys.cast<String>().toList();
-    String? matchingKey;
-    
-    // ✅ NEW Strategy: Search all exam records for matching attemptId
-    for (var key in allKeys) {
-      final record = examBox.get(key);
-      if (record is! Map) continue;
-      
-      // Match by attemptId in the record
-      final recordAttemptId = record['attemptId']?.toString() ?? 
-                             record['attempt']?['attempt_id']?.toString();
-      
-      if (recordAttemptId == widget.attemptId && 
-          record['studentId'] == widget.studentId &&
-          record['submitted'] == true) {
-        matchingKey = key;
-        if (kDebugMode) {
-          debugPrint('   ✓ Found matching record: $key');
-          debugPrint('   Attempt ID in record: $recordAttemptId');
-        }
-        break;
-      }
-    }
-
-    if (matchingKey == null) {
+    try {
       if (kDebugMode) {
-        debugPrint('⚠️ No matching cached results found');
-        
-        // Debug: Show what we have
-        final relevantKeys = allKeys
-            .where((k) => k.contains(widget.studentId))
-            .toList();
-        debugPrint('   Keys for this student: ${relevantKeys.take(3).join(", ")}');
-        
-        // Show attempt IDs we found
-        for (var key in relevantKeys.take(3)) {
-          final rec = examBox.get(key);
-          if (rec is Map) {
-            final aid = rec['attemptId']?.toString() ?? 
-                       rec['attempt']?['attempt_id']?.toString() ?? 'none';
-            debugPrint('   $key -> attemptId: $aid');
-          }
-        }
+        debugPrint('💾 Loading results from cache...');
+        debugPrint('   Attempt ID: ${widget.attemptId}');
+        debugPrint('   Student ID: ${widget.studentId}');
       }
       
+      final allKeys = examBox.keys.cast<String>().toList();
+      String? matchingKey;
+      
+      // Search all records for matching attemptId
+      for (var key in allKeys) {
+        final record = examBox.get(key);
+        if (record is! Map) continue;
+        
+        final recordAttemptId = record['attemptId']?.toString() ?? 
+                               record['attempt']?['attempt_id']?.toString();
+        
+        if (recordAttemptId == widget.attemptId && 
+            record['studentId'] == widget.studentId) {
+          matchingKey = key;
+          if (kDebugMode) {
+            debugPrint('   ✓ Found matching record: $key');
+          }
+          break;
+        }
+      }
+
+      if (matchingKey == null) {
+        if (kDebugMode) {
+          debugPrint('⚠️ No matching cached results found');
+        }
+        
+        if (_disposed || !mounted) return;
+        setState(() {
+          loaded = true;
+          errorMessage = errorMessage ?? 
+              "Results not available offline. Please check your connection.";
+        });
+        return;
+      }
+
+      final cachedRecord = Map<String, dynamic>.from(examBox.get(matchingKey));
+      
+      if (kDebugMode) {
+        debugPrint('✅ Using cached record from: $matchingKey');
+      }
+
+      if (_disposed || !mounted) return;
+
+      setState(() {
+        // Extract results array if available
+        if (cachedRecord['results'] != null && cachedRecord['results'] is List) {
+          results = List<Map<String, dynamic>>.from(cachedRecord['results']);
+        }
+        
+        // Extract legacy format
+        final rawAnswers = cachedRecord['answers'] ?? 
+                          cachedRecord['studentAnswers'] ?? {};
+        studentAnswers = Map<String, dynamic>.from(rawAnswers);
+        
+        final rawQuestions = cachedRecord['questions'] ?? [];
+        questions = (rawQuestions as List)
+            .map((q) => Map<String, dynamic>.from(q))
+            .toList();
+        
+        // Extract score and stats
+        score = cachedRecord['score'] ?? cachedRecord['attempt']?['score'];
+        totalMarks = cachedRecord['totalMarks'] ?? 
+                    cachedRecord['total_marks'] ??
+                    cachedRecord['attempt']?['total_marks'];
+        
+        if (cachedRecord['statistics'] != null) {
+          statistics = Map<String, dynamic>.from(cachedRecord['statistics']);
+        }
+        
+        flagged = cachedRecord['flagged'] ?? false;
+        loaded = true;
+        errorMessage = null;
+      });
+      
+      if (kDebugMode) {
+        debugPrint('✅ Loaded from cache:');
+        debugPrint('   Results: ${results.length}');
+        debugPrint('   Questions: ${questions.length}');
+        debugPrint('   Answers: ${studentAnswers.length}');
+        debugPrint('   Score: $score${totalMarks != null ? " / $totalMarks" : ""}');
+      }
+      
+      if (mounted) {
+        _showSnack("📱 Results loaded from offline cache");
+      }
+    } catch (e, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('⚠️ Error loading from cache: $e');
+        debugPrint('   Stack: $stackTrace');
+      }
       if (_disposed || !mounted) return;
       setState(() {
         loaded = true;
-        errorMessage = errorMessage ?? 
-            "Results not available offline. Please check your connection and try again.";
+        errorMessage = errorMessage ?? "Failed to load results from cache.";
       });
-      return;
     }
-
-    // ✅ Load from matched cache
-    final cachedRecord = Map<String, dynamic>.from(examBox.get(matchingKey));
-    
-    if (kDebugMode) {
-      debugPrint('✅ Using cached record from: $matchingKey');
-    }
-
-    if (_disposed || !mounted) return;
-
-    setState(() {
-      // Extract answers - could be in multiple locations
-      final rawAnswers = cachedRecord['answers'] ?? 
-                        cachedRecord['studentAnswers'] ?? 
-                        cachedRecord['attempt']?['answers'] ?? {};
-      studentAnswers = Map<String, dynamic>.from(rawAnswers);
-      
-      // Extract questions
-      final rawQuestions = cachedRecord['questions'] ?? 
-                          cachedRecord['attempt']?['questions'] ?? [];
-      questions = (rawQuestions as List)
-          .map((q) => Map<String, dynamic>.from(q))
-          .toList();
-      
-      // Extract score
-      score = cachedRecord['score'] ?? 
-             cachedRecord['attempt']?['score'];
-      totalMarks = cachedRecord['totalMarks'] ?? 
-                  cachedRecord['total_marks'] ??
-                  cachedRecord['attempt']?['total_marks'];
-      
-      flagged = cachedRecord['flagged'] ?? false;
-      loaded = true;
-      errorMessage = null;
-    });
-    
-    if (kDebugMode) {
-      debugPrint('✅ Loaded from cache:');
-      debugPrint('   Questions: ${questions.length}');
-      debugPrint('   Answers: ${studentAnswers.length}');
-      debugPrint('   Score: $score${totalMarks != null ? " / $totalMarks" : ""}');
-    }
-    
-    if (mounted) {
-      _showSnack("📱 Results loaded from offline cache");
-    }
-  } catch (e, stackTrace) {
-    if (kDebugMode) {
-      debugPrint('⚠️ Error loading from cache: $e');
-      debugPrint('   Stack: $stackTrace');
-    }
-    if (_disposed || !mounted) return;
-    setState(() {
-      loaded = true;
-      errorMessage = errorMessage ?? "Failed to load results from cache.";
-    });
   }
-}
 
   void _checkAndPlayConfetti() {
     if (_disposed || !mounted || _confettiPlayed) return;
 
     final correctCount = getCorrectCount();
-    final total = questions.length;
+    final total = getTotalQuestions();
     final scorePercent = total == 0 ? 0 : ((correctCount / total) * 100).round();
 
     if (scorePercent >= 75) {
@@ -415,7 +435,7 @@ class _ResultsScreenState extends State<ResultsScreen>
     });
   }
 
-  // Helper to get display text for answers
+  // ✅ Helper to get display text for answers (converts key to text)
   String getAnswerDisplayText(Map<String, dynamic> question, dynamic answerValue) {
     if (answerValue == null || answerValue.toString().isEmpty) {
       return "No answer provided";
@@ -438,37 +458,154 @@ class _ResultsScreenState extends State<ResultsScreen>
     return answerStr;
   }
 
-  int getCorrectCount() => questions.where((q) {
+  int getTotalQuestions() {
+    // Always use actual data first
+    if (results.isNotEmpty) return results.length;
+    if (questions.isNotEmpty) return questions.length;
+    
+    // Fallback to statistics - FIXED to handle double values
+    if (statistics != null && statistics!['totalQuestions'] != null) {
+      return (statistics!['totalQuestions'] as num?)?.toInt() ?? 0;
+    }
+    
+    return 0;
+  }
+
+  int getCorrectCount() {
+    // Prioritize backend statistics if available (more reliable)
+    if (statistics != null && statistics!['correctAnswers'] != null) {
+      return (statistics!['correctAnswers'] as num?)?.toInt() ?? 0;
+    }
+    
+    // Calculate from actual results data
+    if (results.isNotEmpty) {
+      return results.where((r) => r['isCorrect'] == true).length;
+    }
+    
+    if (questions.isNotEmpty) {
+      return questions.where((q) {
+        if (q['isCorrect'] != null) return q['isCorrect'] == true;
         final correct = q['correct']?.toString().trim().toLowerCase();
         final answer = studentAnswers[q['id']]?.toString().trim().toLowerCase();
-        return correct != null && correct == answer && correct != 'n/a' && correct.isNotEmpty;
+        return correct != null && correct == answer && correct.isNotEmpty;
       }).length;
+    }
+    
+    return 0;
+  }
 
-  int getIncorrectCount() => questions.where((q) {
+  int getIncorrectCount() {
+    // Prioritize backend statistics if available (more reliable)
+    if (statistics != null && statistics!['incorrectAnswers'] != null) {
+      return (statistics!['incorrectAnswers'] as num?)?.toInt() ?? 0;
+    }
+    
+    // Calculate from actual results data
+    // FIXED: Only count false, NOT null (null = pending grading)
+    if (results.isNotEmpty) {
+      return results.where((r) {
+        final hasAnswer = r['studentAnswer'] != null && 
+                         r['studentAnswer'].toString().isNotEmpty;
+        // Only count explicitly false answers, not null
+        return hasAnswer && r['isCorrect'] == false;
+      }).length;
+    }
+    
+    if (questions.isNotEmpty) {
+      return questions.where((q) {
+        final answer = studentAnswers[q['id']];
+        final hasAnswer = answer != null && answer.toString().isNotEmpty;
+        
+        if (!hasAnswer) return false;
+        
+        if (q['isCorrect'] != null) {
+          // Only count explicitly false, not null
+          return q['isCorrect'] == false;
+        }
+        
         final correct = q['correct']?.toString().trim().toLowerCase();
-        final answer = studentAnswers[q['id']]?.toString().trim().toLowerCase();
-        return correct != null && correct != answer && correct != 'n/a' && 
-               correct.isNotEmpty && answer != null && answer.isNotEmpty;
+        final answerStr = answer.toString().trim().toLowerCase();
+        return correct != null && correct != answerStr;
       }).length;
+    }
+    
+    return 0;
+  }
 
-  int getUnansweredCount() => questions.where((q) {
+  int getUnansweredCount() {
+    // Prioritize backend statistics if available (more reliable)
+    if (statistics != null && statistics!['unanswered'] != null) {
+      return (statistics!['unanswered'] as num?)?.toInt() ?? 0;
+    }
+    
+    // Calculate from actual results data
+    if (results.isNotEmpty) {
+      return results.where((r) => 
+        r['studentAnswer'] == null || r['studentAnswer'].toString().isEmpty
+      ).length;
+    }
+    
+    if (questions.isNotEmpty) {
+      return questions.where((q) {
         final answer = studentAnswers[q['id']];
         return answer == null || answer.toString().isEmpty;
       }).length;
+    }
+    
+    return 0;
+  }
+
+  // NEW: Add method to get pending grading count (isCorrect: null)
+  int getPendingGradingCount() {
+    if (results.isNotEmpty) {
+      return results.where((r) {
+        final hasAnswer = r['studentAnswer'] != null && 
+                         r['studentAnswer'].toString().isNotEmpty;
+        // Count items that are answered but isCorrect is null
+        return hasAnswer && r['isCorrect'] == null;
+      }).length;
+    }
+    
+    if (questions.isNotEmpty) {
+      return questions.where((q) {
+        final answer = studentAnswers[q['id']];
+        final hasAnswer = answer != null && answer.toString().isNotEmpty;
+        return hasAnswer && q['isCorrect'] == null;
+      }).length;
+    }
+    
+    return 0;
+  }
 
   List<Map<String, dynamic>> getFilteredQuestions() {
+    // Use results array if available
+    if (results.isNotEmpty) {
+      switch (filter) {
+        case FilterOption.correct:
+          return results.where((r) => r['isCorrect'] == true).toList();
+        case FilterOption.incorrect:
+          return results.where((r) => r['isCorrect'] == false).toList();
+        case FilterOption.all:
+        default:
+          return results;
+      }
+    }
+    
+    // Fallback to legacy questions
     switch (filter) {
       case FilterOption.correct:
         return questions.where((q) {
+          if (q['isCorrect'] != null) return q['isCorrect'] == true;
           final correct = q['correct']?.toString().trim().toLowerCase();
           final answer = studentAnswers[q['id']]?.toString().trim().toLowerCase();
-          return correct != null && correct == answer && correct != 'n/a';
+          return correct != null && correct == answer;
         }).toList();
       case FilterOption.incorrect:
         return questions.where((q) {
+          if (q['isCorrect'] != null) return q['isCorrect'] == false;
           final correct = q['correct']?.toString().trim().toLowerCase();
           final answer = studentAnswers[q['id']]?.toString().trim().toLowerCase();
-          return correct != null && correct != answer && correct != 'n/a';
+          return correct != null && correct != answer;
         }).toList();
       case FilterOption.all:
       default:
@@ -503,7 +640,9 @@ class _ResultsScreenState extends State<ResultsScreen>
       );
     }
 
-    if (questions.isEmpty) {
+    final hasData = results.isNotEmpty || questions.isNotEmpty;
+    
+    if (!hasData) {
       return Scaffold(
         appBar: AppBar(
           title: Text(widget.examTitle ?? "Exam Results"),
@@ -556,10 +695,11 @@ class _ResultsScreenState extends State<ResultsScreen>
       );
     }
 
+    final filteredQuestions = getFilteredQuestions();
     final correctCount = getCorrectCount();
     final incorrectCount = getIncorrectCount();
     final unansweredCount = getUnansweredCount();
-    final total = questions.length;
+    final total = getTotalQuestions();
     final scorePercent = total == 0 ? 0 : ((correctCount / total) * 100).round();
     final passed = scorePercent >= 75;
 
@@ -605,62 +745,69 @@ class _ResultsScreenState extends State<ResultsScreen>
         child: Stack(
           alignment: Alignment.topCenter,
           children: [
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFFF3F4F8), Color(0xFFECEEF9)],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-              ),
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(12.0),
-                    child: ExamSummaryCard(
-                      correctCount: correctCount,
-                      incorrectCount: incorrectCount,
-                      unansweredCount: unansweredCount,
-                      total: total,
-                      scorePercent: scorePercent,
-                      passed: passed,
-                      flagged: flagged,
-                      dataMap: dataMap,
-                      filter: filter,
-                      score: score,
-                      totalMarks: totalMarks,
-                      onFilterChanged: (f) {
-                        if (!_disposed && mounted) {
-                          setState(() => filter = f);
-                        }
-                      },
+            SlideTransition(
+              position: _slideAnimation,
+              child: FadeTransition(
+                opacity: _fadeAnimation,
+                child: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFFF3F4F8), Color(0xFFECEEF9)],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
                     ),
                   ),
-                  Expanded(
-                    child: QuestionList(
-                      questions: getFilteredQuestions(),
-                      studentAnswers: studentAnswers,
-                      controller: _scrollController,
-                      getAnswerDisplayText: getAnswerDisplayText,
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: ElevatedButton.icon(
-                      onPressed: () => navigateToDashboard(context, widget.studentId),
-                      icon: const Icon(Icons.dashboard),
-                      label: const Text("Back to Dashboard"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.indigo,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: ExamSummaryCard(
+                          correctCount: correctCount,
+                          incorrectCount: incorrectCount,
+                          unansweredCount: unansweredCount,
+                          total: total,
+                          scorePercent: scorePercent,
+                          passed: passed,
+                          flagged: flagged,
+                          dataMap: dataMap,
+                          filter: filter,
+                          score: score,
+                          totalMarks: totalMarks,
+                          onFilterChanged: (f) {
+                            if (!_disposed && mounted) {
+                              setState(() => filter = f);
+                            }
+                          },
                         ),
-                        minimumSize: const Size(180, 45),
                       ),
-                    ),
+                      Expanded(
+                        child: QuestionList(
+                          questions: filteredQuestions,
+                          studentAnswers: studentAnswers,
+                          controller: _scrollController,
+                          getAnswerDisplayText: getAnswerDisplayText,
+                          useResultsFormat: results.isNotEmpty,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: ElevatedButton.icon(
+                          onPressed: () => navigateToDashboard(context, widget.studentId),
+                          icon: const Icon(Icons.dashboard),
+                          label: const Text("Back to Dashboard"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.indigo,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            minimumSize: const Size(180, 45),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
             ConfettiWidget(
@@ -785,7 +932,9 @@ class ExamSummaryCard extends StatelessWidget {
                   Colors.red.shade400,
                   Colors.grey.shade400
                 ],
-                chartValuesOptions: const ChartValuesOptions(showChartValuesInPercentage: true),
+                chartValuesOptions: const ChartValuesOptions(
+                  showChartValuesInPercentage: true,
+                ),
                 legendOptions: const LegendOptions(
                   legendPosition: LegendPosition.bottom,
                   showLegendsInRow: true,
@@ -808,7 +957,11 @@ class ExamSummaryCard extends StatelessWidget {
                         color: selected ? Colors.indigo.shade100 : Colors.grey.shade100,
                         borderRadius: BorderRadius.circular(20),
                         boxShadow: selected
-                            ? [BoxShadow(color: Colors.indigo.withOpacity(0.3), blurRadius: 6, offset: const Offset(0, 2))]
+                            ? [BoxShadow(
+                                color: Colors.indigo.withOpacity(0.3),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              )]
                             : [],
                       ),
                       child: Text(
@@ -834,7 +987,14 @@ class ExamSummaryCard extends StatelessWidget {
       children: [
         Text(title, style: const TextStyle(fontSize: 14)),
         const SizedBox(height: 4),
-        Text("$value", style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(
+          "$value",
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
       ],
     );
   }
@@ -877,11 +1037,13 @@ class _ResultBadge extends StatelessWidget {
   }
 }
 
+// ✅ Updated QuestionList to handle both formats
 class QuestionList extends StatelessWidget {
   final List<Map<String, dynamic>> questions;
   final Map<String, dynamic> studentAnswers;
   final ScrollController controller;
   final String Function(Map<String, dynamic>, dynamic) getAnswerDisplayText;
+  final bool useResultsFormat;
 
   const QuestionList({
     super.key,
@@ -889,6 +1051,7 @@ class QuestionList extends StatelessWidget {
     required this.studentAnswers,
     required this.controller,
     required this.getAnswerDisplayText,
+    required this.useResultsFormat,
   });
 
   @override
@@ -904,38 +1067,81 @@ class QuestionList extends StatelessWidget {
       itemCount: questions.length,
       itemBuilder: (context, index) {
         final q = questions[index];
-        final answer = studentAnswers[q['id']];
-        final correct = q['correct'];
         
-        final isCorrect = correct != null &&
-            correct.toString().trim().toLowerCase() ==
-            answer?.toString().trim().toLowerCase();
+        // ✅ Get data from results format or legacy format
+        bool? isCorrect;
+        dynamic studentAnswer;
+        dynamic correctAnswer;
+        int? pointsAwarded;
+        int? maxPoints;
+        
+        if (useResultsFormat || q.containsKey('isCorrect')) {
+          // NEW API format with isCorrect and points
+          isCorrect = q['isCorrect'];
+          studentAnswer = q['studentAnswer'] ?? studentAnswers[q['id']];
+          correctAnswer = q['correctAnswer']; // May be null (hidden by backend)
+          pointsAwarded = q['pointsAwarded'];
+          maxPoints = q['maxPoints'];
+        } else {
+          // Legacy format: manual checking
+          final answer = studentAnswers[q['id']];
+          final correct = q['correct'];
+          isCorrect = correct != null &&
+              correct.toString().trim().toLowerCase() ==
+              answer?.toString().trim().toLowerCase();
+          studentAnswer = answer;
+          correctAnswer = correct;
+          maxPoints = q['marks'];
+        }
 
-        final Color statusColor = (answer == null || answer.toString().isEmpty)
-            ? Colors.grey
-            : (isCorrect ? Colors.green.shade600 : Colors.red.shade600);
+        // Determine status color and icon
+        Color statusColor;
+        IconData statusIcon;
+        
+        if (studentAnswer == null || studentAnswer.toString().isEmpty) {
+          statusColor = Colors.grey;
+          statusIcon = Icons.help_outline;
+        } else if (isCorrect == true) {
+          statusColor = Colors.green.shade600;
+          statusIcon = Icons.check_circle;
+        } else if (isCorrect == false) {
+          statusColor = Colors.red.shade600;
+          statusIcon = Icons.cancel;
+        } else {
+          // Manually graded (essay) or null
+          statusColor = Colors.orange.shade600;
+          statusIcon = Icons.pending;
+        }
 
-        final studentAnswerText = getAnswerDisplayText(q, answer);
-        final correctAnswerText = correct != null ? getAnswerDisplayText(q, correct) : 'Not available';
+        // Get display text for answers
+        final studentAnswerText = getAnswerDisplayText(q, studentAnswer);
+        
+        // ✅ Handle hidden correct answers gracefully
+        String correctAnswerText;
+        if (correctAnswer == null || correctAnswer.toString().isEmpty) {
+          correctAnswerText = 'Not available';
+        } else {
+          correctAnswerText = getAnswerDisplayText(q, correctAnswer);
+        }
 
         return Card(
           elevation: 2,
           margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: statusColor.withOpacity(0.4), width: 1.5),
+            side: BorderSide(
+              color: statusColor.withOpacity(0.4),
+              width: 1.5,
+            ),
           ),
           child: ExpansionTile(
-            leading: Icon(
-              (answer == null || answer.toString().isEmpty)
-                  ? Icons.help_outline
-                  : (isCorrect ? Icons.check_circle : Icons.cancel),
-              color: statusColor,
-              size: 28,
-            ),
+            leading: Icon(statusIcon, color: statusColor, size: 28),
             title: Text(
               q['question'] ?? "Question",
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+              ),
             ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -943,7 +1149,11 @@ class QuestionList extends StatelessWidget {
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    Icon(isCorrect ? Icons.check : Icons.close, size: 16, color: statusColor),
+                    Icon(
+                      isCorrect == true ? Icons.check : Icons.close,
+                      size: 16,
+                      color: statusColor,
+                    ),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
@@ -958,21 +1168,92 @@ class QuestionList extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: Row(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        "Correct answer: $correctAnswerText",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green.shade700,
-                          fontSize: 14,
+                    // ✅ Show correct answer (or "Not available")
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.check_circle,
+                          color: correctAnswer == null 
+                              ? Colors.grey.shade600 
+                              : Colors.green.shade700,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "Correct answer: $correctAnswerText",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: correctAnswer == null 
+                                  ? Colors.grey.shade700 
+                                  : Colors.green.shade700,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    
+                    // ✅ Show points if available
+                    if (pointsAwarded != null && maxPoints != null) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.score,
+                            color: Colors.blue.shade700,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            "Points: $pointsAwarded / $maxPoints",
+                            style: TextStyle(
+                              color: Colors.blue.shade900,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    
+                    // Show feedback if available (for essays)
+                    if (q.containsKey('feedback') && q['feedback'] != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.feedback,
+                              color: Colors.blue.shade700,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                q['feedback'],
+                                style: TextStyle(
+                                  color: Colors.blue.shade900,
+                                  fontSize: 13,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),

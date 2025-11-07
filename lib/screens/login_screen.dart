@@ -141,14 +141,19 @@ class _LoginScreenState extends State<LoginScreen>
         // Save token to Hive for persistence
         await box.put('authToken', token);
         
+        // ✅ FIX: Only save credentials when Remember Me is checked
+        // Always update rememberMe state, but only save credentials if checked
         if (_rememberMe) {
           await box.put('studentId', id);
           await box.put('password', password);
           await box.put('rememberMe', true);
+          debugPrint('✅ Credentials saved (Remember Me enabled)');
         } else {
+          // Clear saved credentials when Remember Me is unchecked
           await box.delete('studentId');
           await box.delete('password');
           await box.put('rememberMe', false);
+          debugPrint('🗑️ Credentials cleared (Remember Me disabled)');
         }
 
         if (!mounted) return;
@@ -178,8 +183,8 @@ class _LoginScreenState extends State<LoginScreen>
         await Future.delayed(const Duration(milliseconds: 400));
         Navigator.of(context).pushReplacement(PageRouteBuilder(
           pageBuilder: (_, __, ___) => StudentDashboard(
-            studentId: databaseId ?? user['id_number'] ?? id,  // Prefer database ID
-            studentName: fullName.isNotEmpty ? fullName : null,  // Pass full name
+            studentId: databaseId ?? user['id_number'] ?? id,
+            studentName: fullName.isNotEmpty ? fullName : null,
           ),
           transitionsBuilder: (_, animation, __, child) {
             return FadeTransition(

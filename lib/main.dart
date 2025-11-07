@@ -123,7 +123,14 @@ class MyApp extends StatelessWidget {
           final expectedOTP = args?['expectedOTP'] as String?;
           final forResults = args?['forResults'] as bool? ?? false;
           final onVerified = args?['onVerified'] as VoidCallback?;
-          final attemptId = args?['attemptId'] as String?;  // ✅ ADDED: Extract attemptId
+          final attemptId = args?['attemptId'] as String?;
+          
+          // ✅ NEW: Extract exam details for enhanced display
+          final examTitle = args?['examTitle'] as String?;
+          final examDate = args?['examDate'] as String?;
+          final examTime = args?['examTime'] as String?;
+          final duration = args?['duration'] as String?;
+          final questionCount = args?['questionCount'] as int?;
 
           return OTPScreen(
             examId: examId,
@@ -132,7 +139,13 @@ class MyApp extends StatelessWidget {
             expectedOTP: expectedOTP,
             forResults: forResults,
             onVerified: onVerified,
-            attemptId: attemptId,  // ✅ ADDED: Pass attemptId to OTPScreen
+            attemptId: attemptId,
+            // ✅ NEW: Pass exam details to OTPScreen
+            examTitle: examTitle,
+            examDate: examDate,
+            examTime: examTime,
+            duration: duration,
+            questionCount: questionCount,
           );
         },
         '/exam': (context) {

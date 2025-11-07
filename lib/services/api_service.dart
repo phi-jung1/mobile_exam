@@ -620,6 +620,11 @@ static Future<Map<String, dynamic>?> fetchExamResults({
           final questionId = resultItem['id']?.toString() ?? 
                             'item_${resultItem['itemId']}';
           
+          debugPrint('  Processing item: $questionId');
+          debugPrint('    correctAnswer: ${resultItem['correctAnswer']}');
+          debugPrint('    studentAnswer: ${resultItem['studentAnswer']}');
+          debugPrint('    isCorrect: ${resultItem['isCorrect']}');
+          
           // Build question object
           final question = {
             'id': questionId,
@@ -630,7 +635,7 @@ static Future<Map<String, dynamic>?> fetchExamResults({
             'originalType': resultItem['originalType'],
             'question': resultItem['question'],
             'choices': resultItem['choices'],
-            'correct': resultItem['correctAnswer'], // ✅ From backend
+            'correct': resultItem['correctAnswer'], // ✅ This is the correct answer key
             'correctAnswer': resultItem['correctAnswer'],
             'marks': resultItem['maxPoints'],
             'maxPoints': resultItem['maxPoints'],
@@ -651,14 +656,19 @@ static Future<Map<String, dynamic>?> fetchExamResults({
           
           questionsData.add(question);
           
-          // Extract student answer
-          if (resultItem['studentAnswer'] != null) {
+          // ✅ CRITICAL: Extract student answer - handle both string and other types
+          if (resultItem['studentAnswer'] != null && 
+              resultItem['studentAnswer'].toString().isNotEmpty) {
             answersData[questionId] = resultItem['studentAnswer'];
+            debugPrint('    ✓ Added answer for $questionId: ${resultItem['studentAnswer']}');
+          } else {
+            debugPrint('    ⚠️ No answer for $questionId');
           }
         }
         
         debugPrint('✅ Parsed ${questionsData.length} questions from results array');
         debugPrint('✅ Extracted ${answersData.length} answers');
+        debugPrint('📋 Answers map: $answersData');
       }
       
       // ✅ Fallback: Try legacy format if results array is empty
@@ -697,6 +707,7 @@ static Future<Map<String, dynamic>?> fetchExamResults({
       debugPrint('✅ Results loaded from API');
       debugPrint('   Questions: ${questionsData.length}');
       debugPrint('   Answers: ${answersData.length}');
+      debugPrint('   Final answers structure: ${answersData.keys.toList()}');
       
       return normalizedResponse;
     } else if (response.statusCode == 400) {

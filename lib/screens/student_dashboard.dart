@@ -345,22 +345,40 @@ class _StudentDashboardState extends State<StudentDashboard>
     if (shouldLogout != true || _disposed) return;
 
     try {
-      // Clear login data from Hive
       final loginBox = await Hive.openBox('loginBox');
+      
+      // ✅ FIX: Check Remember Me status BEFORE clearing data
+      final rememberMe = loginBox.get('rememberMe', defaultValue: false);
+      
+      // Clear auth token and user data (always)
       await loginBox.delete('authToken');
       await loginBox.delete('user');
-      await loginBox.delete('studentId');
-      await loginBox.put('rememberMe', false);
       
-      // Clear auth token
+      // ✅ FIX: Only clear credentials if Remember Me is NOT enabled
+      if (!rememberMe) {
+        await loginBox.delete('studentId');
+        await loginBox.delete('password');
+        debugPrint('🗑️ Credentials cleared (Remember Me was off)');
+      } else {
+        debugPrint('💾 Credentials preserved (Remember Me is on)');
+      }
+      
+      // Keep rememberMe flag as-is (don't change it)
+      // await loginBox.put('rememberMe', false); // ❌ DON'T DO THIS
+      
+      // Clear auth token from ApiService
       ApiService.setAuthToken('');
       
       if (mounted && !_disposed) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("✅ Logged out successfully!"),
+          SnackBar(
+            content: Text(
+              rememberMe 
+                ? "✅ Logged out successfully! (Credentials saved)"
+                : "✅ Logged out successfully!"
+            ),
             backgroundColor: Colors.green,
-            duration: Duration(seconds: 2),
+            duration: const Duration(seconds: 2),
           ),
         );
 
@@ -652,10 +670,6 @@ class AnimatedConnectivityBanner extends StatelessWidget {
   }
 }
 
-// Only showing the critical part that needs to be fixed in ExamList class
-
-// Only the critical part that needs to be fixed in ExamList class
-
 class ExamList extends StatelessWidget {
   final List<Map> exams;
   final String studentId;
@@ -671,37 +685,91 @@ class ExamList extends StatelessWidget {
   });
 
   void _navigateWithOtp({
-    required BuildContext context,
-    required String subject,
-    required String route,
-    required Map arguments,
-    required bool forResults,
-    required String examPassword,
-    required int numericExamId,
-    int? attemptId,
-  }) {
-    debugPrint('🔒 Navigating to OTP screen:');
-    debugPrint('   Exam ID (numeric): $numericExamId');
-    if (attemptId != null) {
-      debugPrint('   Attempt ID: $attemptId');
-    }
-    debugPrint('   Student ID: $studentId (type: ${studentId.runtimeType})');
-    
-    Navigator.pushNamed(context, '/otp', arguments: {
-      'subject': subject,
-      'forResults': forResults,
-      'studentId': studentId,
-      'examId': numericExamId.toString(),  // ✅ For password verification
-      'attemptId': attemptId?.toString(),  // ✅ For results screen navigation
-      'onVerified': () => Navigator.pushNamed(context, route, arguments: arguments),
-    });
+  required BuildContext context,
+  required String subject,
+  required String route,
+  required Map arguments,
+  required bool forResults,
+  required String examPassword,
+  required int numericExamId,
+  required Map exam, // ✅ Pass entire exam object for details
+  int? attemptId,
+}) {
+  debugPrint('🔒 Navigating to OTP screen with exam details:');
+  debugPrint('   Exam ID (numeric): $numericExamId');
+  if (attemptId != null) {
+    debugPrint('   Attempt ID: $attemptId');
   }
+  debugPrint('   Student ID: $studentId (type: ${studentId.runtimeType})');
+  
+  // ✅ Extract exam details from the exam object
+  final examTitle = exam['title']?.toString() ?? 'Untitled Exam';
+  final examDate = exam['date']?.toString();
+  final examDuration = exam['duration']?.toString();
+  final questionCount = exam['questionCount'] as int?;
+  
+  // ✅ Parse time range if available (e.g., "10:00 AM - 12:00 PM")
+  String? examTime;
+  if (exam['startTime'] != null && exam['endTime'] != null) {
+    examTime = '${exam['startTime']} - ${exam['endTime']}';
+  } else if (exam['time'] != null) {
+    examTime = exam['time'].toString();
+  }
+  
+  debugPrint('   📋 Exam Title: $examTitle');
+  debugPrint('   📅 Date: $examDate');
+  debugPrint('   ⏰ Time: $examTime');
+  debugPrint('   ⏱️ Duration: $examDuration');
+  debugPrint('   📝 Questions: $questionCount');
+  
+  Navigator.pushNamed(context, '/otp', arguments: {
+    'subject': subject,
+    'forResults': forResults,
+    'studentId': studentId,
+    'examId': numericExamId.toString(),
+    'attemptId': attemptId?.toString(),
+    'examTitle': examTitle, // ✅ Pass exam title
+    'examDate': examDate, // ✅ Pass date
+    'examTime': examTime, // ✅ Pass time
+    'duration': examDuration, // ✅ Pass duration
+    'questionCount': questionCount, // ✅ Pass question count
+    'onVerified': () => Navigator.pushNamed(context, route, arguments: arguments),
+  });
+}
 
   @override
   Widget build(BuildContext context) {
     if (exams.isEmpty) {
-      return const Center(
-        child: Text("No exams found.", style: TextStyle(color: Colors.grey)),
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              completed ? Icons.assignment_turned_in_outlined : Icons.assignment_outlined,
+              size: 80,
+              color: Colors.grey.shade300,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              completed ? "No completed exams yet" : "No available exams",
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              completed 
+                ? "Completed exams will appear here" 
+                : "New exams will appear here when available",
+              style: TextStyle(
+                color: Colors.grey.shade500,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
       );
     }
 
@@ -735,10 +803,23 @@ class ExamList extends StatelessWidget {
             if (!completed && !inSchedule) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: const Text("⏰ This exam is not yet available. Please wait for the scheduled time."),
+                  content: Row(
+                    children: [
+                      const Icon(Icons.access_time, color: Colors.white),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: const Text(
+                          "This exam is not yet available. Please wait for the scheduled time.",
+                        ),
+                      ),
+                    ],
+                  ),
                   backgroundColor: Colors.orange.shade600,
                   behavior: SnackBarBehavior.floating,
                   duration: const Duration(seconds: 3),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                 ),
               );
             }
@@ -747,17 +828,12 @@ class ExamList extends StatelessWidget {
 
           final route = completed ? '/results' : '/exam';
           
-          // ✅ CRITICAL FIX: Extract attempt ID from the attempt object
           int? attemptIdForResults;
           if (completed) {
-            // Try multiple possible locations for attempt ID
             if (exam['attempt'] != null && exam['attempt'] is Map) {
-              // From attempt object
               attemptIdForResults = exam['attempt']['attempt_id'];
-
               debugPrint('📊 Found attempt ID in attempt object: $attemptIdForResults');
             } else if (exam['attemptId'] != null) {
-              // From top-level field
               attemptIdForResults = exam['attemptId'] is int 
                   ? exam['attemptId'] 
                   : int.tryParse(exam['attemptId'].toString());
@@ -767,9 +843,6 @@ class ExamList extends StatelessWidget {
             
             if (attemptIdForResults == null) {
               debugPrint('⚠️ WARNING: No attempt ID found in exam data!');
-              debugPrint('   Exam keys: ${exam.keys.toList()}');
-              debugPrint('   Attempt data: ${exam['attempt']}');
-              debugPrint('   AttemptId field: ${exam['attemptId']}');
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text("❌ Cannot view results: Missing attempt information"),
@@ -783,7 +856,7 @@ class ExamList extends StatelessWidget {
           
           final arguments = completed
               ? {
-                  'attemptId': attemptIdForResults?.toString() ?? '',  // ✅ Pass attemptId
+                  'attemptId': attemptIdForResults?.toString() ?? '',
                   'studentId': studentId,
                   'examTitle': examTitle,
                   'subject': subject,
@@ -797,6 +870,7 @@ class ExamList extends StatelessWidget {
                 };
 
           if (requiresOtp) {
+            // ✅ Pass the entire exam object
             _navigateWithOtp(
               context: context,
               subject: subject,
@@ -804,164 +878,238 @@ class ExamList extends StatelessWidget {
               arguments: arguments,
               forResults: completed,
               examPassword: examPassword,
-              numericExamId: numericExamId,  // ✅ Exam ID for password verification
-              attemptId: attemptIdForResults,  // ✅ Attempt ID for results navigation
+              numericExamId: numericExamId,
+              exam: exam, // ✅ Pass entire exam object
+              attemptId: attemptIdForResults,
             );
           } else {
             Navigator.pushNamed(context, route, arguments: arguments);
           }
         }
-
-        final cardColor = completed ? Colors.orange.shade50 : Colors.blue.shade50;
-        final sideStripColor = completed
-            ? (resultsReleased ? Colors.greenAccent : Colors.orangeAccent)
-            : (exam['available'] == true && inSchedule ? Colors.blueAccent : Colors.grey);
+        // 🎨 Improved color scheme
+        final cardColor = completed 
+            ? (resultsReleased ? Colors.green.shade50 : Colors.orange.shade50)
+            : (inSchedule ? Colors.blue.shade50 : Colors.grey.shade50);
+            
+        final accentColor = completed
+            ? (resultsReleased ? Colors.green : Colors.orange)
+            : (exam['available'] == true && inSchedule ? Colors.blue : Colors.grey);
 
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0.95, end: 1.0),
-            duration: const Duration(milliseconds: 350),
-            curve: Curves.easeOut,
+            tween: Tween(begin: 0.92, end: 1.0),
+            duration: Duration(milliseconds: 300 + (index * 50)),
+            curve: Curves.easeOutCubic,
             builder: (context, scale, child) {
               return Transform.scale(scale: scale, child: child);
             },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
+            child: Container(
               decoration: BoxDecoration(
-                color: cardColor,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(2, 2)),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: accentColor.withOpacity(0.15),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
                 ],
               ),
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(20),
                   onTap: onButtonPressed,
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 140,
-                        decoration: BoxDecoration(
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(16),
-                            bottomLeft: Radius.circular(16),
-                          ),
-                          gradient: LinearGradient(
-                            colors: [sideStripColor.withOpacity(0.6), sideStripColor],
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                          ),
-                        ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: accentColor.withOpacity(0.3),
+                        width: 1.5,
                       ),
-                      Expanded(
-                        child: Padding(
+                    ),
+                    child: Column(
+                      children: [
+                        // 🎨 Header section with gradient
+                        Container(
                           padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                accentColor.withOpacity(0.1),
+                                accentColor.withOpacity(0.05),
+                              ],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: const BorderRadius.only(
+                              topLeft: Radius.circular(20),
+                              topRight: Radius.circular(20),
+                            ),
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                examTitle,
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                subjectCode.isNotEmpty ? '$subjectCode - $subject' : subject,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.blue.shade700,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    "Date: $date",
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black54,
+                                  // 🎨 Icon badge
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: accentColor.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      completed
+                                          ? Icons.assignment_turned_in
+                                          : Icons.assignment,
+                                      color: accentColor,
+                                      size: 24,
                                     ),
                                   ),
-                                  Flexible(
-                                    child: Wrap(
-                                      spacing: 6,
-                                      runSpacing: 4,
-                                      alignment: WrapAlignment.end,
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        if (!completed && inSchedule)
-                                          AnimatedOpacity(
-                                            opacity: 1,
-                                            duration: const Duration(milliseconds: 400),
-                                            child: _badge("📅 Active", Colors.green),
+                                        Text(
+                                          examTitle,
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.grey.shade900,
                                           ),
-                                        if (!completed && !inSchedule)
-                                          AnimatedOpacity(
-                                            opacity: 1,
-                                            duration: const Duration(milliseconds: 400),
-                                            child: _badge("📋 Scheduled", Colors.blue),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          subjectCode.isNotEmpty 
+                                              ? '$subjectCode - $subject' 
+                                              : subject,
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            color: accentColor.shade700,
                                           ),
-                                        if (requiresOtp)
-                                          AnimatedOpacity(
-                                            opacity: 1,
-                                            duration: const Duration(milliseconds: 400),
-                                            child: _badge("🔒 Password", Colors.purple),
-                                          ),
-                                        if (completed)
-                                          AnimatedOpacity(
-                                            opacity: 1,
-                                            duration: const Duration(milliseconds: 400),
-                                            child: _badge(
-                                              resultsReleased ? "Results Ready" : "Pending",
-                                              resultsReleased ? Colors.green.shade700 : Colors.grey.shade700,
-                                            ),
-                                          ),
-                                        if (submitted)
-                                          AnimatedOpacity(
-                                            opacity: 1,
-                                            duration: const Duration(milliseconds: 400),
-                                            child: _badge(
-                                              exam['synced'] == true ? "Synced ✅" : "Syncing…",
-                                              exam['synced'] == true ? Colors.green : Colors.orange,
-                                            ),
-                                          ),
+                                        ),
                                       ],
                                     ),
                                   ),
                                 ],
                               ),
+                            ],
+                          ),
+                        ),
+                        
+                        // 🎨 Body section
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              // Date row
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.calendar_today,
+                                    size: 16,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    date,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
                               const SizedBox(height: 12),
+                              
+                              // Badges row
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  if (!completed && inSchedule)
+                                    _modernBadge(
+                                      "Available Now",
+                                      Colors.green,
+                                      Icons.check_circle,
+                                    ),
+                                  if (!completed && !inSchedule)
+                                    _modernBadge(
+                                      "Scheduled",
+                                      Colors.blue,
+                                      Icons.schedule,
+                                    ),
+                                  if (requiresOtp)
+                                    _modernBadge(
+                                      "Password Protected",
+                                      Colors.purple,
+                                      Icons.lock,
+                                    ),
+                                  if (completed)
+                                    _modernBadge(
+                                      resultsReleased ? "Graded" : "Under Review",
+                                      resultsReleased ? Colors.green : Colors.orange,
+                                      resultsReleased ? Icons.grade : Icons.pending,
+                                    ),
+                                  if (submitted)
+                                    _modernBadge(
+                                      exam['synced'] == true ? "Submitted" : "Submitting",
+                                      exam['synced'] == true ? Colors.teal : Colors.orange,
+                                      exam['synced'] == true ? Icons.cloud_done : Icons.cloud_upload,
+                                    ),
+                                ],
+                              ),
+                              
+                              const SizedBox(height: 16),
+                              
+                              // Action button
                               SizedBox(
                                 width: double.infinity,
                                 child: ElevatedButton(
                                   onPressed: isButtonEnabled ? onButtonPressed : null,
                                   style: ElevatedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
                                     ),
-                                    backgroundColor: completed ? Colors.orange : Colors.blueAccent,
-                                    elevation: 2,
+                                    backgroundColor: accentColor,
+                                    foregroundColor: Colors.white,
+                                    elevation: isButtonEnabled ? 2 : 0,
+                                    disabledBackgroundColor: Colors.grey.shade300,
+                                    disabledForegroundColor: Colors.grey.shade600,
                                   ),
-                                  child: Text(
-                                    buttonText,
-                                    style: const TextStyle(fontSize: 16),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        completed
+                                            ? Icons.assessment
+                                            : Icons.play_arrow,
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        buttonText,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -972,21 +1120,43 @@ class ExamList extends StatelessWidget {
     );
   }
 
-  Widget _badge(String text, Color color) {
+  Widget _modernBadge(String text, Color color, IconData icon) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: color.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          color: color,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: color.withOpacity(0.4),
+          width: 1,
         ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 14,
+            color:  _darkenColor(color, 0.3),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: _darkenColor(color, 0.4),
+            ),
+          ),
+        ],
       ),
     );
   }
+}
+
+Color _darkenColor(Color color, double amount) {
+  assert(amount >= 0 && amount <= 1);
+  final hsl = HSLColor.fromColor(color);
+  final darkened = hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0));
+  return darkened.toColor();
 }
