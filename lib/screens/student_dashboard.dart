@@ -212,6 +212,10 @@ class _StudentDashboardState extends State<StudentDashboard>
         'completedAt': exam['attempt']?['end_time'],
         'questions': exam['questions'] ?? [],
         'timestamp': DateTime.now().toIso8601String(), // ✅ Add timestamp for cleanup
+
+        'questionCount': exam['questions'] != null 
+        ? (exam['questions'] as List).length 
+        : (exam['questionCount'] ?? exam['question_count'] ?? 0),
       };
       
       // Add to parallel operations
@@ -685,57 +689,75 @@ class ExamList extends StatelessWidget {
   });
 
   void _navigateWithOtp({
-  required BuildContext context,
-  required String subject,
-  required String route,
-  required Map arguments,
-  required bool forResults,
-  required String examPassword,
-  required int numericExamId,
-  required Map exam, // ✅ Pass entire exam object for details
-  int? attemptId,
-}) {
-  debugPrint('🔒 Navigating to OTP screen with exam details:');
-  debugPrint('   Exam ID (numeric): $numericExamId');
-  if (attemptId != null) {
-    debugPrint('   Attempt ID: $attemptId');
+    required BuildContext context,
+    required String subject,
+    required String route,
+    required Map arguments,
+    required bool forResults,
+    required String examPassword,
+    required int numericExamId,
+    required Map exam,
+    int? attemptId,
+  }) {
+    debugPrint('🔒 Navigating to OTP screen with exam details:');
+    debugPrint('   Exam ID (numeric): $numericExamId');
+    if (attemptId != null) {
+      debugPrint('   Attempt ID: $attemptId');
+    }
+    debugPrint('   Student ID: $studentId (type: ${studentId.runtimeType})');
+    
+    // ✅ Extract exam details
+    final examTitle = exam['title']?.toString() ?? 'Untitled Exam';
+    final examDate = exam['date']?.toString();
+    final examDuration = exam['duration']?.toString();
+    
+    // ✅ FIXED: Try multiple possible field names for question count
+    int? questionCount;
+    if (exam['questionCount'] != null) {
+      questionCount = exam['questionCount'] is int 
+          ? exam['questionCount'] 
+          : int.tryParse(exam['questionCount'].toString());
+    } else if (exam['question_count'] != null) {
+      questionCount = exam['question_count'] is int 
+          ? exam['question_count'] 
+          : int.tryParse(exam['question_count'].toString());
+    } else if (exam['questions'] != null && exam['questions'] is List) {
+      questionCount = (exam['questions'] as List).length;
+    } else if (exam['total_questions'] != null) {
+      questionCount = exam['total_questions'] is int 
+          ? exam['total_questions'] 
+          : int.tryParse(exam['total_questions'].toString());
+    }
+    
+    // ✅ Parse time
+    String? examTime;
+    if (exam['startTime'] != null && exam['endTime'] != null) {
+      examTime = '${exam['startTime']} - ${exam['endTime']}';
+    } else if (exam['time'] != null) {
+      examTime = exam['time'].toString();
+    } else if (exam['start_time'] != null && exam['end_time'] != null) {
+      examTime = '${exam['start_time']} - ${exam['end_time']}';
+    }
+    
+    debugPrint('   📋 Exam Title: $examTitle');
+    debugPrint('   📅 Date: $examDate');
+    debugPrint('   ⏱️ Duration: $examDuration');
+    debugPrint('   📝 Questions: $questionCount');
+    
+    Navigator.pushNamed(context, '/otp', arguments: {
+      'subject': subject,
+      'forResults': forResults,
+      'studentId': studentId,
+      'examId': numericExamId.toString(),
+      'attemptId': attemptId?.toString(),
+      'examTitle': examTitle,
+      'examDate': examDate,
+      'examTime': examTime,
+      'duration': examDuration,
+      'questionCount': questionCount,
+      'onVerified': () => Navigator.pushNamed(context, route, arguments: arguments),
+    });
   }
-  debugPrint('   Student ID: $studentId (type: ${studentId.runtimeType})');
-  
-  // ✅ Extract exam details from the exam object
-  final examTitle = exam['title']?.toString() ?? 'Untitled Exam';
-  final examDate = exam['date']?.toString();
-  final examDuration = exam['duration']?.toString();
-  final questionCount = exam['questionCount'] as int?;
-  
-  // ✅ Parse time range if available (e.g., "10:00 AM - 12:00 PM")
-  String? examTime;
-  if (exam['startTime'] != null && exam['endTime'] != null) {
-    examTime = '${exam['startTime']} - ${exam['endTime']}';
-  } else if (exam['time'] != null) {
-    examTime = exam['time'].toString();
-  }
-  
-  debugPrint('   📋 Exam Title: $examTitle');
-  debugPrint('   📅 Date: $examDate');
-  debugPrint('   ⏰ Time: $examTime');
-  debugPrint('   ⏱️ Duration: $examDuration');
-  debugPrint('   📝 Questions: $questionCount');
-  
-  Navigator.pushNamed(context, '/otp', arguments: {
-    'subject': subject,
-    'forResults': forResults,
-    'studentId': studentId,
-    'examId': numericExamId.toString(),
-    'attemptId': attemptId?.toString(),
-    'examTitle': examTitle, // ✅ Pass exam title
-    'examDate': examDate, // ✅ Pass date
-    'examTime': examTime, // ✅ Pass time
-    'duration': examDuration, // ✅ Pass duration
-    'questionCount': questionCount, // ✅ Pass question count
-    'onVerified': () => Navigator.pushNamed(context, route, arguments: arguments),
-  });
-}
 
   @override
   Widget build(BuildContext context) {
@@ -744,18 +766,25 @@ class ExamList extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              completed ? Icons.assignment_turned_in_outlined : Icons.assignment_outlined,
-              size: 80,
-              color: Colors.grey.shade300,
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                completed ? Icons.assignment_turned_in_outlined : Icons.assignment_outlined,
+                size: 64,
+                color: Colors.grey.shade400,
+              ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
             Text(
               completed ? "No completed exams yet" : "No available exams",
               style: TextStyle(
-                color: Colors.grey.shade600,
+                color: Colors.grey.shade800,
                 fontSize: 18,
-                fontWeight: FontWeight.w500,
+                fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 8),
@@ -764,7 +793,7 @@ class ExamList extends StatelessWidget {
                 ? "Completed exams will appear here" 
                 : "New exams will appear here when available",
               style: TextStyle(
-                color: Colors.grey.shade500,
+                color: Colors.grey.shade600,
                 fontSize: 14,
               ),
             ),
@@ -775,361 +804,394 @@ class ExamList extends StatelessWidget {
 
     return ListView.builder(
       controller: scrollController,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.only(top: 16, bottom: 24),
       itemCount: exams.length,
-      itemBuilder: (context, index) {
-        final exam = exams[index];
-        final numericExamId = exam['examId'] ?? 0;
-        final examTitle = (exam['title'] ?? 'Untitled Exam').toString();
-        final subject = (exam['subject'] ?? 'Unknown Subject').toString();
-        final subjectCode = (exam['subjectCode'] ?? '').toString();
-        final date = (exam['date'] ?? 'No date set').toString();
-        final requiresOtp = exam['requiresOtp'] ?? false;
-        final examPassword = (exam['examPassword'] ?? '1234').toString();
-        final resultsReleased = exam['resultsReleased'] ?? false;
-        final submitted = exam['submitted'] ?? false;
-        final inSchedule = exam['inSchedule'] ?? false;
+      itemBuilder: (context, index) => _buildExamCard(context, index),
+    );
+  }
 
-        final buttonText = completed
-            ? (resultsReleased ? "View Results" : "Pending Results")
-            : (inSchedule ? "Take Exam" : "Scheduled");
+  Widget _buildExamCard(BuildContext context, int index) {
+  final exam = exams[index];
+  final numericExamId = exam['examId'] ?? 0;
+  final examTitle = (exam['title'] ?? 'Untitled Exam').toString();
+  final subject = (exam['subject'] ?? 'Unknown Subject').toString();
+  final subjectCode = (exam['subjectCode'] ?? '').toString();
+  final date = (exam['date'] ?? 'No date set').toString();
+  final requiresOtp = exam['requiresOtp'] ?? false;
+  final examPassword = (exam['examPassword'] ?? '1234').toString();
+  final resultsReleased = exam['resultsReleased'] ?? false;
+  final submitted = exam['submitted'] ?? false;
+  final inSchedule = exam['inSchedule'] ?? false;
 
-        final isButtonEnabled = !completed
-            ? (exam['available'] == true && !exam['submitted'] && inSchedule)
-            : resultsReleased;
+  final buttonText = completed
+      ? (resultsReleased ? "View Results" : "Pending Results")
+      : (inSchedule ? "Take Exam" : "Scheduled");
 
-        void onButtonPressed() {
-          if (!isButtonEnabled) {
-            if (!completed && !inSchedule) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Row(
-                    children: [
-                      const Icon(Icons.access_time, color: Colors.white),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: const Text(
-                          "This exam is not yet available. Please wait for the scheduled time.",
-                        ),
-                      ),
-                    ],
-                  ),
-                  backgroundColor: Colors.orange.shade600,
-                  behavior: SnackBarBehavior.floating,
-                  duration: const Duration(seconds: 3),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
+  final isButtonEnabled = !completed
+      ? (exam['available'] == true && !exam['submitted'] && inSchedule)
+      : resultsReleased;
+
+  // Modern color scheme
+  final cardColor = completed 
+      ? (resultsReleased ? Colors.white : Colors.white)
+      : (inSchedule ? Colors.white : Colors.white);
+      
+  final accentColor = completed
+      ? (resultsReleased ? const Color(0xFF10B981) : const Color(0xFFF59E0B))
+      : (exam['available'] == true && inSchedule ? const Color(0xFF3B82F6) : const Color(0xFF6B7280));
+
+  void onButtonPressed() {
+    if (!isButtonEnabled) {
+      if (!completed && !inSchedule) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.schedule_outlined, color: Colors.white, size: 20),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    "This exam is not yet available.",
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
                   ),
                 ),
-              );
-            }
-            return;
-          }
+              ],
+            ),
+            backgroundColor: const Color(0xFFF59E0B),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+      return;
+    }
 
-          final route = completed ? '/results' : '/exam';
-          
-          int? attemptIdForResults;
-          if (completed) {
-            if (exam['attempt'] != null && exam['attempt'] is Map) {
-              attemptIdForResults = exam['attempt']['attempt_id'];
-              debugPrint('📊 Found attempt ID in attempt object: $attemptIdForResults');
-            } else if (exam['attemptId'] != null) {
-              attemptIdForResults = exam['attemptId'] is int 
-                  ? exam['attemptId'] 
-                  : int.tryParse(exam['attemptId'].toString());
-            }
-            
-            debugPrint('📊 Extracted attempt ID for results: $attemptIdForResults');
-            
-            if (attemptIdForResults == null) {
-              debugPrint('⚠️ WARNING: No attempt ID found in exam data!');
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("❌ Cannot view results: Missing attempt information"),
-                  backgroundColor: Colors.red,
-                  duration: Duration(seconds: 3),
-                ),
-              );
-              return;
-            }
+    final route = completed ? '/results' : '/exam';
+    
+    int? attemptIdForResults;
+    if (completed) {
+      if (exam['attempt'] != null && exam['attempt'] is Map) {
+        attemptIdForResults = exam['attempt']['attempt_id'];
+      } else if (exam['attemptId'] != null) {
+        attemptIdForResults = exam['attemptId'] is int 
+            ? exam['attemptId'] 
+            : int.tryParse(exam['attemptId'].toString());
+      }
+      
+      if (attemptIdForResults == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text("Cannot view results: Missing attempt information"),
+            backgroundColor: Colors.red.shade600,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+        return;
+      }
+    }
+    
+    final arguments = completed
+        ? {
+            'attemptId': attemptIdForResults?.toString() ?? '',
+            'studentId': studentId,
+            'examTitle': examTitle,
+            'subject': subject,
           }
-          
-          final arguments = completed
-              ? {
-                  'attemptId': attemptIdForResults?.toString() ?? '',
-                  'studentId': studentId,
-                  'examTitle': examTitle,
-                  'subject': subject,
-                }
-              : {
-                  'studentId': studentId,
-                  'subject': subject,
-                  'examId': numericExamId.toString(),
-                  'examTitle': examTitle,
-                  'assignmentId': exam['assignmentId']?.toString() ?? numericExamId.toString(),
-                };
+        : {
+            'studentId': studentId,
+            'subject': subject,
+            'examId': numericExamId.toString(),
+            'examTitle': examTitle,
+            'assignmentId': exam['assignmentId']?.toString() ?? numericExamId.toString(),
+          };
 
-          if (requiresOtp) {
-            // ✅ Pass the entire exam object
-            _navigateWithOtp(
-              context: context,
-              subject: subject,
-              route: route,
-              arguments: arguments,
-              forResults: completed,
-              examPassword: examPassword,
-              numericExamId: numericExamId,
-              exam: exam, // ✅ Pass entire exam object
-              attemptId: attemptIdForResults,
-            );
-          } else {
-            Navigator.pushNamed(context, route, arguments: arguments);
-          }
-        }
-        // 🎨 Improved color scheme
-        final cardColor = completed 
-            ? (resultsReleased ? Colors.green.shade50 : Colors.orange.shade50)
-            : (inSchedule ? Colors.blue.shade50 : Colors.grey.shade50);
-            
-        final accentColor = completed
-            ? (resultsReleased ? Colors.green : Colors.orange)
-            : (exam['available'] == true && inSchedule ? Colors.blue : Colors.grey);
+    if (requiresOtp) {
+      _navigateWithOtp(
+        context: context,
+        subject: subject,
+        route: route,
+        arguments: arguments,
+        forResults: completed,
+        examPassword: examPassword,
+        numericExamId: numericExamId,
+        exam: exam,
+        attemptId: attemptIdForResults,
+      );
+    } else {
+      Navigator.pushNamed(context, route, arguments: arguments);
+    }
+  }
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0.92, end: 1.0),
-            duration: Duration(milliseconds: 300 + (index * 50)),
-            curve: Curves.easeOutCubic,
-            builder: (context, scale, child) {
-              return Transform.scale(scale: scale, child: child);
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: accentColor.withOpacity(0.15),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+  // Parse the ISO date format
+  String formattedDate = date;
+  String? formattedTime;
+  try {
+    final parsedDate = DateTime.parse(date);
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    formattedDate = '${months[parsedDate.month - 1]} ${parsedDate.day}, ${parsedDate.year}';
+    
+    // Extract time
+    final hour = parsedDate.hour;
+    final minute = parsedDate.minute.toString().padLeft(2, '0');
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+    formattedTime = '$displayHour:$minute $period';
+  } catch (e) {
+    // Keep original date if parsing fails
+  }
+
+  return Padding(
+    padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+    child: TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.9, end: 1.0),
+      duration: Duration(milliseconds: 200 + (index * 50)),
+      curve: Curves.easeOutCubic,
+      builder: (context, scale, child) {
+        return Transform.scale(
+          scale: scale,
+          child: Opacity(
+            opacity: scale,
+            child: child,
+          ),
+        );
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: isButtonEnabled ? onButtonPressed : null,
+          child: Container(
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.grey.shade200,
+                width: 1,
               ),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(20),
-                  onTap: onButtonPressed,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: cardColor,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: accentColor.withOpacity(0.3),
-                        width: 1.5,
-                      ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Accent bar at the top
+                Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: accentColor,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
                     ),
-                    child: Column(
-                      children: [
-                        // 🎨 Header section with gradient
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                accentColor.withOpacity(0.1),
-                                accentColor.withOpacity(0.05),
+                  ),
+                ),
+                
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header with icon and title
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Icon
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: accentColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              completed
+                                  ? (resultsReleased ? Icons.check_circle_outline : Icons.pending_outlined)
+                                  : Icons.description_outlined,
+                              color: accentColor,
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          
+                          // Title and subject
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  examTitle,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey.shade900,
+                                    height: 1.3,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  subjectCode.isNotEmpty ? subjectCode : subject,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: accentColor,
+                                  ),
+                                ),
                               ],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: const BorderRadius.only(
-                              topLeft: Radius.circular(20),
-                              topRight: Radius.circular(20),
                             ),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  // 🎨 Icon badge
-                                  Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: accentColor.withOpacity(0.2),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Icon(
-                                      completed
-                                          ? Icons.assignment_turned_in
-                                          : Icons.assignment,
-                                      color: accentColor,
-                                      size: 24,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          examTitle,
-                                          style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.grey.shade900,
-                                          ),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          subjectCode.isNotEmpty 
-                                              ? '$subjectCode - $subject' 
-                                              : subject,
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                            color: accentColor.shade700,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                        ],
+                      ),
+                      
+                      const SizedBox(height: 16),
+                      
+                      // Date and time row
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.calendar_today_outlined,
+                            size: 16,
+                            color: Colors.grey.shade600,
                           ),
-                        ),
-                        
-                        // 🎨 Body section
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
+                          const SizedBox(width: 8),
+                          Text(
+                            formattedDate,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          if (formattedTime != null) ...[
+                            const SizedBox(width: 16),
+                            Icon(
+                              Icons.access_time_outlined,
+                              size: 16,
+                              color: Colors.grey.shade600,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              formattedTime,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade700,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      
+                      const SizedBox(height: 12),
+                      
+                      // Status badges
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (!completed && inSchedule)
+                            _buildBadge(
+                              "Available",
+                              const Color(0xFF10B981),
+                              Icons.check_circle,
+                            ),
+                          if (!completed && !inSchedule)
+                            _buildBadge(
+                              "Scheduled",
+                              const Color(0xFF6B7280),
+                              Icons.schedule,
+                            ),
+                          if (requiresOtp)
+                            _buildBadge(
+                              "Protected",
+                              const Color(0xFF8B5CF6),
+                              Icons.lock_outline,
+                            ),
+                          if (completed)
+                            _buildBadge(
+                              resultsReleased ? "Graded" : "Under Review",
+                              resultsReleased ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                              resultsReleased ? Icons.grade_outlined : Icons.pending_outlined,
+                            ),
+                          if (submitted)
+                            _buildBadge(
+                              "Submitted",
+                              const Color(0xFF14B8A6),
+                              Icons.cloud_done_outlined,
+                            ),
+                        ],
+                      ),
+                      
+                      const SizedBox(height: 16),
+                      
+                      // Action button
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: isButtonEnabled ? onButtonPressed : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isButtonEnabled ? accentColor : Colors.grey.shade300,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            disabledBackgroundColor: Colors.grey.shade200,
+                            disabledForegroundColor: Colors.grey.shade500,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              // Date row
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.calendar_today,
-                                    size: 16,
-                                    color: Colors.grey.shade600,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    date,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.grey.shade700,
-                                    ),
-                                  ),
-                                ],
+                              Icon(
+                                completed
+                                    ? Icons.assessment_outlined
+                                    : Icons.play_arrow_rounded,
+                                size: 20,
                               ),
-                              const SizedBox(height: 12),
-                              
-                              // Badges row
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  if (!completed && inSchedule)
-                                    _modernBadge(
-                                      "Available Now",
-                                      Colors.green,
-                                      Icons.check_circle,
-                                    ),
-                                  if (!completed && !inSchedule)
-                                    _modernBadge(
-                                      "Scheduled",
-                                      Colors.blue,
-                                      Icons.schedule,
-                                    ),
-                                  if (requiresOtp)
-                                    _modernBadge(
-                                      "Password Protected",
-                                      Colors.purple,
-                                      Icons.lock,
-                                    ),
-                                  if (completed)
-                                    _modernBadge(
-                                      resultsReleased ? "Graded" : "Under Review",
-                                      resultsReleased ? Colors.green : Colors.orange,
-                                      resultsReleased ? Icons.grade : Icons.pending,
-                                    ),
-                                  if (submitted)
-                                    _modernBadge(
-                                      exam['synced'] == true ? "Submitted" : "Submitting",
-                                      exam['synced'] == true ? Colors.teal : Colors.orange,
-                                      exam['synced'] == true ? Icons.cloud_done : Icons.cloud_upload,
-                                    ),
-                                ],
-                              ),
-                              
-                              const SizedBox(height: 16),
-                              
-                              // Action button
-                              SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton(
-                                  onPressed: isButtonEnabled ? onButtonPressed : null,
-                                  style: ElevatedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    backgroundColor: accentColor,
-                                    foregroundColor: Colors.white,
-                                    elevation: isButtonEnabled ? 2 : 0,
-                                    disabledBackgroundColor: Colors.grey.shade300,
-                                    disabledForegroundColor: Colors.grey.shade600,
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        completed
-                                            ? Icons.assessment
-                                            : Icons.play_arrow,
-                                        size: 20,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        buttonText,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                              const SizedBox(width: 8),
+                              Text(
+                                buttonText,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.3,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
+              ],
             ),
           ),
-        );
-      },
-    );
-  }
-
-  Widget _modernBadge(String text, Color color, IconData icon) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: color.withOpacity(0.4),
-          width: 1,
         ),
+      ),
+    ),
+  );
+}
+
+  Widget _buildBadge(String text, Color color, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1137,26 +1199,19 @@ class ExamList extends StatelessWidget {
           Icon(
             icon,
             size: 14,
-            color:  _darkenColor(color, 0.3),
+            color: color,
           ),
           const SizedBox(width: 6),
           Text(
             text,
             style: TextStyle(
               fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: _darkenColor(color, 0.4),
+              fontWeight: FontWeight.w600,
+              color: color,
             ),
           ),
         ],
       ),
     );
   }
-}
-
-Color _darkenColor(Color color, double amount) {
-  assert(amount >= 0 && amount <= 1);
-  final hsl = HSLColor.fromColor(color);
-  final darkened = hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0));
-  return darkened.toColor();
 }

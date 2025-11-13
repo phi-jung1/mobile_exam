@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'results_screen.dart';
 import 'exam_screen.dart';
 import '../services/api_service.dart';
@@ -14,7 +15,7 @@ class OTPScreen extends StatefulWidget {
   final VoidCallback? onVerified;
   final String? attemptId;
   
-  // NEW: Exam details for enhanced display
+  // Exam details for enhanced display
   final String? examTitle;
   final String? examDate;
   final String? examTime;
@@ -63,7 +64,6 @@ class _OTPScreenState extends State<OTPScreen>
   void initState() {
     super.initState();
     
-    // Shake animation for errors
     _shakeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 450),
@@ -72,7 +72,6 @@ class _OTPScreenState extends State<OTPScreen>
         .chain(CurveTween(curve: Curves.elasticIn))
         .animate(_shakeController);
     
-    // Pulse animation for lock icon
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2000),
@@ -81,20 +80,17 @@ class _OTPScreenState extends State<OTPScreen>
         .chain(CurveTween(curve: Curves.easeInOut))
         .animate(_pulseController);
     
-    // Success animation
     _successController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
     
-    // Auto-focus
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_disposed) {
         _focusNode.requestFocus();
       }
     });
     
-    // Listen to password changes for strength indicator
     passwordController.addListener(_updatePasswordStrength);
   }
 
@@ -115,6 +111,38 @@ class _OTPScreenState extends State<OTPScreen>
         _passwordStrength = PasswordStrength.strong;
       }
     });
+  }
+
+  // ✅ NEW: Helper method to format date and time
+  Map<String, String?> _parseExamDateTime() {
+    String? formattedDate;
+    String? formattedTime;
+    
+    if (widget.examDate != null) {
+      try {
+        // Try parsing ISO format
+        final parsedDate = DateTime.parse(widget.examDate!);
+        formattedDate = DateFormat('MMM dd, yyyy').format(parsedDate);
+        
+        // If no separate time is provided, extract from date
+        if (widget.examTime == null) {
+          formattedTime = DateFormat('h:mm a').format(parsedDate);
+        }
+      } catch (e) {
+        // If parsing fails, use original
+        formattedDate = widget.examDate;
+      }
+    }
+    
+    // Use provided time if available
+    if (widget.examTime != null) {
+      formattedTime = widget.examTime;
+    }
+    
+    return {
+      'date': formattedDate,
+      'time': formattedTime,
+    };
   }
 
   Future<void> _verifyPassword() async {
@@ -146,7 +174,6 @@ class _OTPScreenState extends State<OTPScreen>
       _isSuccess = false;
     });
 
-    // Parse IDs
     int examIdInt;
     int studentIdInt;
     
@@ -196,7 +223,6 @@ class _OTPScreenState extends State<OTPScreen>
       debugPrint('🔐 Verifying password for exam $examIdInt with API...');
     }
 
-    // Call API
     final verified = await ApiService.verifyExamPassword(
       examId: examIdInt,
       studentId: studentIdInt,
@@ -229,7 +255,6 @@ class _OTPScreenState extends State<OTPScreen>
 
       if (_disposed || !mounted) return;
 
-      // Navigate
       if (widget.forResults) {
         if (widget.attemptId == null || widget.attemptId!.isEmpty) {
           if (kDebugMode) {
@@ -326,7 +351,7 @@ class _OTPScreenState extends State<OTPScreen>
             Icon(
               success ? Icons.check_circle_rounded : Icons.error_rounded,
               color: Colors.white,
-              size: 22,
+              size: 20,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -341,7 +366,7 @@ class _OTPScreenState extends State<OTPScreen>
             ),
           ],
         ),
-        backgroundColor: success ? const Color(0xFF4CAF50) : const Color(0xFFF44336),
+        backgroundColor: success ? const Color(0xFF10B981) : const Color(0xFFF44336),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
         shape: RoundedRectangleBorder(
@@ -367,18 +392,14 @@ class _OTPScreenState extends State<OTPScreen>
   @override
   Widget build(BuildContext context) {
     final title = widget.forResults
-        ? "Verify Password to View Results"
-        : "Verify Password to Start Exam";
-
-    final subtitle = widget.forResults
-        ? "Enter the exam password provided by your instructor to access your results."
-        : "Enter the exam password provided by your instructor to begin your exam.";
+        ? "View Your Results"
+        : "Exam Authentication";
 
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF1565C0), Color(0xFF42A5F5)],
+            colors: [Color(0xFF667eea), Color(0xFF764ba2)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -386,69 +407,62 @@ class _OTPScreenState extends State<OTPScreen>
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+              padding: const EdgeInsets.all(20),
               child: Card(
-                elevation: 20,
+                elevation: 8,
                 shadowColor: Colors.black.withOpacity(0.3),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 500),
+                  padding: const EdgeInsets.all(24),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Animated Lock Icon
                       _buildLockIcon(),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 20),
                       
-                      // Title
                       Text(
                         title,
                         style: const TextStyle(
-                          fontSize: 22,
+                          fontSize: 24,
                           fontWeight: FontWeight.w700,
-                          color: Color(0xFF212121),
+                          color: Color(0xFF1F2937),
                         ),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 8),
                       
-                      // Subject/Exam Title
-                      Text(
-                        widget.examTitle ?? widget.subject,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          color: Color(0xFF1976D2),
-                          fontWeight: FontWeight.w600,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
                         ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 12),
-                      
-                      // Subtitle
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey.shade700,
-                          height: 1.5,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF3B82F6).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
                         ),
-                        textAlign: TextAlign.center,
+                        child: Text(
+                          widget.examTitle ?? widget.subject,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            color: Color(0xFF3B82F6),
+                            fontWeight: FontWeight.w600,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                       
-                      // Exam Details Card (if provided)
-                      if (!widget.forResults && _hasExamDetails())
+                      if (!widget.forResults) ...[
+                        const SizedBox(height: 20),
                         _buildExamDetailsCard(),
+                      ],
                       
                       const SizedBox(height: 24),
+                      _buildInfoBox(),
+                      const SizedBox(height: 20),
 
-                      // Helper Text
-                      _buildHelperText(),
-                      
-                      const SizedBox(height: 16),
-
-                      // Password Input with Animation
                       AnimatedBuilder(
                         animation: _shakeController,
                         builder: (context, child) {
@@ -460,21 +474,17 @@ class _OTPScreenState extends State<OTPScreen>
                         child: _buildPasswordInput(),
                       ),
 
-                      // Password Strength Indicator
                       if (_passwordStrength != PasswordStrength.none)
                         _buildStrengthIndicator(),
 
                       const SizedBox(height: 24),
                       
-                      // Verification Status
                       if (_isVerifying) _buildVerifyingStatus(),
                       
-                      // Verify Button
                       _buildVerifyButton(),
                       
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                       
-                      // Back Button
                       _buildBackButton(),
                     ],
                   ),
@@ -492,164 +502,168 @@ class _OTPScreenState extends State<OTPScreen>
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Pulsing Circle
         ScaleTransition(
           scale: _pulseAnimation,
           child: Container(
-            width: 100,
-            height: 100,
+            width: 90,
+            height: 90,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: LinearGradient(
                 colors: [
-                  const Color(0xFFE3F2FD),
-                  const Color(0xFFBBDEFB),
+                  const Color(0xFF3B82F6).withOpacity(0.2),
+                  const Color(0xFF3B82F6).withOpacity(0.1),
                 ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.blue.withOpacity(0.2),
-                  blurRadius: 24,
-                  spreadRadius: 4,
-                ),
-              ],
             ),
           ),
         ),
         
-        // Lock Icon or Success Checkmark
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 500),
-          child: _isSuccess
-              ? ScaleTransition(
-                  scale: _successController,
-                  child: const Icon(
+        Container(
+          width: 70,
+          height: 70,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 500),
+            child: _isSuccess
+                ? const Icon(
                     Icons.check_circle_rounded,
-                    size: 52,
-                    color: Color(0xFF4CAF50),
+                    size: 40,
+                    color: Color(0xFF10B981),
                     key: ValueKey('success'),
+                  )
+                : Icon(
+                    Icons.lock_rounded,
+                    size: 36,
+                    color: const Color(0xFF3B82F6),
+                    key: const ValueKey('lock'),
                   ),
-                )
-              : Icon(
-                  Icons.lock_rounded,
-                  size: 48,
-                  color: const Color(0xFF1976D2),
-                  key: const ValueKey('lock'),
-                ),
-        ),
-        
-        // Security Badge
-        if (!_isSuccess)
-          Positioned(
-            bottom: 0,
-            right: 0,
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: const Color(0xFF4CAF50),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.green.withOpacity(0.4),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.check,
-                color: Colors.white,
-                size: 16,
-              ),
-            ),
           ),
+        ),
       ],
     );
   }
 
-  bool _hasExamDetails() {
-    return widget.examDate != null ||
-        widget.examTime != null ||
-        widget.duration != null ||
-        widget.questionCount != null;
-  }
-
   Widget _buildExamDetailsCard() {
+    final dateTime = _parseExamDateTime();
+    final formattedDate = dateTime['date'];
+    final formattedTime = dateTime['time'];
+    
+    // Debug logging
+    if (kDebugMode) {
+      debugPrint('🎨 Building exam details card:');
+      debugPrint('   Date: $formattedDate');
+      debugPrint('   Time: $formattedTime');
+      debugPrint('   Duration: ${widget.duration}');
+      debugPrint('   Question Count: ${widget.questionCount}');
+    }
+    
     return Container(
-      margin: const EdgeInsets.only(top: 24),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Colors.grey.shade50,
-            Colors.grey.shade100,
-          ],
-        ),
+        color: Colors.grey.shade50,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: Colors.grey.shade200),
       ),
       child: Column(
         children: [
-          if (widget.examDate != null || widget.examTime != null)
+          if (formattedDate != null)
             _buildDetailRow(
               Icons.calendar_today_rounded,
-              '${widget.examDate ?? ''} ${widget.examTime ?? ''}'.trim(),
+              formattedDate,
+              const Color(0xFF3B82F6),
             ),
-          if (widget.duration != null)
-            _buildDetailRow(Icons.timer_rounded, 'Duration: ${widget.duration}'),
-          if (widget.questionCount != null)
-            _buildDetailRow(Icons.quiz_rounded, '${widget.questionCount} questions'),
+          if (formattedTime != null) ...[
+            const SizedBox(height: 8),
+            _buildDetailRow(
+              Icons.access_time_rounded,
+              formattedTime,
+              const Color(0xFF8B5CF6),
+            ),
+          ],
+          if (widget.duration != null) ...[
+            const SizedBox(height: 8),
+            _buildDetailRow(
+              Icons.timer_rounded,
+              '${widget.duration} ${widget.duration == '1' ? 'hour' : 'hours'}',
+              const Color(0xFF10B981),
+            ),
+          ],
+          if (widget.questionCount != null && widget.questionCount! > 0) ...[
+            const SizedBox(height: 8),
+            _buildDetailRow(
+              Icons.quiz_rounded,
+              '${widget.questionCount} question${widget.questionCount! > 1 ? 's' : ''}',
+              const Color(0xFFF59E0B),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildDetailRow(IconData icon, String text) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: const Color(0xFF1976D2)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                fontSize: 13,
-                color: Color(0xFF424242),
-                fontWeight: FontWeight.w500,
-              ),
+  Widget _buildDetailRow(IconData icon, String text, Color color) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, size: 18, color: color),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade800,
+              fontWeight: FontWeight.w600,
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  Widget _buildHelperText() {
+  Widget _buildInfoBox() {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFE3F2FD),
-        borderRadius: BorderRadius.circular(8),
-        border: const Border(
-          left: BorderSide(color: Color(0xFF2196F3), width: 3),
+        color: const Color(0xFF3B82F6).withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFF3B82F6).withOpacity(0.3),
         ),
       ),
       child: Row(
         children: [
-          const Icon(Icons.lightbulb_rounded, color: Color(0xFF1565C0), size: 20),
-          const SizedBox(width: 10),
+          const Icon(
+            Icons.info_rounded,
+            color: Color(0xFF3B82F6),
+            size: 20,
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Text(
-              "Contact your instructor if you don't have the password",
+              widget.forResults
+                  ? "Enter the password to view your results"
+                  : "Enter the password to start your exam",
               style: const TextStyle(
                 fontSize: 13,
-                color: Color(0xFF1565C0),
+                color: Color(0xFF1E40AF),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -660,82 +674,78 @@ class _OTPScreenState extends State<OTPScreen>
   }
 
   Widget _buildPasswordInput() {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 400),
-      child: TextField(
-        controller: passwordController,
-        focusNode: _focusNode,
-        obscureText: _obscurePassword,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          fontSize: 20,
-          letterSpacing: _obscurePassword ? 8.0 : 1.2,
-          fontWeight: FontWeight.w600,
-        ),
-        decoration: InputDecoration(
-          hintText: "Enter password",
-          hintStyle: TextStyle(
-            color: Colors.grey.shade400,
-            fontSize: 16,
-            letterSpacing: 1.0,
-          ),
-          prefixIcon: Icon(
-            Icons.key_rounded,
-            size: 22,
-            color: _isError
-                ? Colors.red
-                : _isSuccess
-                    ? const Color(0xFF4CAF50)
-                    : Colors.grey.shade600,
-          ),
-          suffixIcon: IconButton(
-            icon: Icon(
-              _obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-              size: 22,
-            ),
-            onPressed: () {
-              setState(() => _obscurePassword = !_obscurePassword);
-            },
-            tooltip: _obscurePassword ? 'Show password' : 'Hide password',
-          ),
-          filled: true,
-          fillColor: _isError
-              ? const Color(0xFFFFEBEE)
-              : _isSuccess
-                  ? const Color(0xFFE8F5E9)
-                  : Colors.grey.shade50,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 18,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: _isError
-                  ? const Color(0xFFF44336)
-                  : _isSuccess
-                      ? const Color(0xFF4CAF50)
-                      : const Color(0xFF2196F3),
-              width: 2,
-            ),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(
-              color: _isError
-                  ? Colors.red.shade300
-                  : _isSuccess
-                      ? const Color(0xFF4CAF50)
-                      : Colors.grey.shade300,
-              width: 2,
-            ),
-          ),
-        ),
-        keyboardType: TextInputType.visiblePassword,
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _verifyPassword(),
-        enabled: !_isVerifying,
+    return TextField(
+      controller: passwordController,
+      focusNode: _focusNode,
+      obscureText: _obscurePassword,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 18,
+        letterSpacing: _obscurePassword ? 6.0 : 1.0,
+        fontWeight: FontWeight.w600,
+        color: Colors.grey.shade800,
       ),
+      decoration: InputDecoration(
+        hintText: "Enter password",
+        hintStyle: TextStyle(
+          color: Colors.grey.shade400,
+          fontSize: 15,
+          letterSpacing: 1.0,
+        ),
+        prefixIcon: Icon(
+          Icons.key_rounded,
+          size: 20,
+          color: _isError
+              ? const Color(0xFFF44336)
+              : _isSuccess
+                  ? const Color(0xFF10B981)
+                  : const Color(0xFF6B7280),
+        ),
+        suffixIcon: IconButton(
+          icon: Icon(
+            _obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+            size: 20,
+            color: Colors.grey.shade600,
+          ),
+          onPressed: () {
+            setState(() => _obscurePassword = !_obscurePassword);
+          },
+        ),
+        filled: true,
+        fillColor: _isError
+            ? const Color(0xFFF44336).withOpacity(0.05)
+            : _isSuccess
+                ? const Color(0xFF10B981).withOpacity(0.05)
+                : Colors.grey.shade100,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: _isError
+                ? const Color(0xFFF44336)
+                : _isSuccess
+                    ? const Color(0xFF10B981)
+                    : const Color(0xFF3B82F6),
+            width: 2,
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: _isError
+                ? const Color(0xFFF44336).withOpacity(0.5)
+                : Colors.grey.shade300,
+            width: 1.5,
+          ),
+        ),
+      ),
+      keyboardType: TextInputType.visiblePassword,
+      textInputAction: TextInputAction.done,
+      onSubmitted: (_) => _verifyPassword(),
+      enabled: !_isVerifying,
     );
   }
 
@@ -749,7 +759,7 @@ class _OTPScreenState extends State<OTPScreen>
               return Expanded(
                 child: Container(
                   height: 4,
-                  margin: EdgeInsets.only(right: index < 3 ? 4 : 0),
+                  margin: EdgeInsets.only(right: index < 3 ? 6 : 0),
                   decoration: BoxDecoration(
                     color: _getStrengthBarColor(index),
                     borderRadius: BorderRadius.circular(2),
@@ -781,20 +791,24 @@ class _OTPScreenState extends State<OTPScreen>
   Widget _buildVerifyingStatus() {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(strokeWidth: 3),
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.5,
+              color: const Color(0xFF3B82F6),
+            ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(width: 12),
           Text(
-            'Verifying with server...',
+            'Verifying...',
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               color: Colors.grey.shade600,
-              fontStyle: FontStyle.italic,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -805,41 +819,36 @@ class _OTPScreenState extends State<OTPScreen>
   Widget _buildVerifyButton() {
     return SizedBox(
       width: double.infinity,
-      height: 52,
+      height: 50,
       child: ElevatedButton(
         onPressed: _isVerifying ? null : _verifyPassword,
         style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF1976D2),
+          backgroundColor: const Color(0xFF3B82F6),
           foregroundColor: Colors.white,
-          disabledBackgroundColor: Colors.grey.shade400,
+          disabledBackgroundColor: Colors.grey.shade300,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          elevation: 4,
-          shadowColor: Colors.blue.withOpacity(0.3),
+          elevation: 0,
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (_isVerifying)
-              const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
-              )
-            else
-              const Icon(Icons.verified_user_rounded, size: 22),
+            Icon(
+              _isVerifying
+                  ? Icons.hourglass_empty_rounded
+                  : (widget.forResults ? Icons.assessment_rounded : Icons.play_arrow_rounded),
+              size: 20,
+            ),
             const SizedBox(width: 10),
             Text(
               _isVerifying
                   ? "Verifying..."
-                  : (widget.forResults ? "Verify & View Results" : "Verify & Start Exam"),
+                  : (widget.forResults ? "View Results" : "Start Exam"),
               style: const TextStyle(
                 fontSize: 16,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.3,
               ),
             ),
           ],
@@ -849,27 +858,19 @@ class _OTPScreenState extends State<OTPScreen>
   }
 
   Widget _buildBackButton() {
-    return SizedBox(
-      width: double.infinity,
-      child: OutlinedButton.icon(
-        onPressed: _isVerifying
-            ? null
-            : () {
-                if (mounted) Navigator.pop(context);
-              },
-        icon: const Icon(Icons.arrow_back_rounded, size: 20),
-        label: const Text(
-          "Back to Dashboard",
-          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-        ),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: const Color(0xFF1976D2),
-          side: BorderSide(color: Colors.grey.shade300, width: 2),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-        ),
+    return TextButton.icon(
+      onPressed: _isVerifying
+          ? null
+          : () {
+              if (mounted) Navigator.pop(context);
+            },
+      icon: const Icon(Icons.arrow_back_rounded, size: 18),
+      label: const Text(
+        "Back to Dashboard",
+        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+      style: TextButton.styleFrom(
+        foregroundColor: const Color(0xFF6B7280),
       ),
     );
   }
@@ -885,7 +886,7 @@ class _OTPScreenState extends State<OTPScreen>
             ),
             title: const Row(
               children: [
-                Icon(Icons.help_rounded, color: Color(0xFFFF9800)),
+                Icon(Icons.help_rounded, color: Color(0xFFF59E0B)),
                 SizedBox(width: 12),
                 Text('Need Help?'),
               ],
@@ -894,18 +895,9 @@ class _OTPScreenState extends State<OTPScreen>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildHelpItem('Contact your instructor for the exam password'),
-                _buildHelpItem('Ensure you have a stable internet connection'),
-                _buildHelpItem('Make sure you\'re using the correct student ID'),
-                const SizedBox(height: 16),
-                const Text(
-                  'For technical support, contact your system administrator.',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontStyle: FontStyle.italic,
-                    color: Colors.grey,
-                  ),
-                ),
+                _buildHelpItem('Ask your instructor for the exam password'),
+                _buildHelpItem('Ensure stable internet connection'),
+                _buildHelpItem('Use the correct student ID'),
               ],
             ),
             actions: [
@@ -917,7 +909,7 @@ class _OTPScreenState extends State<OTPScreen>
           ),
         );
       },
-      backgroundColor: const Color(0xFFFF9800),
+      backgroundColor: const Color(0xFFF59E0B),
       child: const Icon(Icons.help_rounded, color: Colors.white),
     );
   }
@@ -928,12 +920,12 @@ class _OTPScreenState extends State<OTPScreen>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.check_circle, size: 18, color: Color(0xFF4CAF50)),
-          const SizedBox(width: 8),
+          const Icon(Icons.check_circle, size: 16, color: Color(0xFF10B981)),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(fontSize: 14),
+              style: const TextStyle(fontSize: 13),
             ),
           ),
         ],
@@ -945,8 +937,8 @@ class _OTPScreenState extends State<OTPScreen>
 enum PasswordStrength {
   none(0, 'Enter password', Colors.grey),
   weak(1, 'Weak', Color(0xFFF44336)),
-  medium(2, 'Medium', Color(0xFFFF9800)),
-  strong(4, 'Strong', Color(0xFF4CAF50));
+  medium(2, 'Medium', Color(0xFFF59E0B)),
+  strong(4, 'Strong', Color(0xFF10B981));
 
   const PasswordStrength(this.barCount, this.label, this.color);
   final int barCount;
