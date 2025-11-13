@@ -12,10 +12,10 @@ Future<void> navigateToDashboard(BuildContext context, String studentId) async {
   Navigator.of(context).popUntil((route) => route.isFirst);
 }
 
-enum FilterOption { all, correct, incorrect }
+enum FilterOption { all, correct, incorrect, pending }
 
 class ResultsScreen extends StatefulWidget {
-  final String attemptId;  // ✅ This is the attempt ID from the exam attempt
+  final String attemptId;
   final String studentId;
   final String? examTitle;
   final String? subject;
@@ -41,12 +41,10 @@ class _ResultsScreenState extends State<ResultsScreen>
   late final Animation<Offset> _slideAnimation;
   late final Animation<double> _fadeAnimation;
 
-  // ✅ NEW: Use results array from API (contains isCorrect and points)
   List<Map<String, dynamic>> results = [];
   Map<String, dynamic>? statistics;
   Map<String, dynamic>? attemptInfo;
   
-  // Legacy support for cache
   Map<String, dynamic> studentAnswers = {};
   List<Map<String, dynamic>> questions = [];
   
@@ -62,7 +60,7 @@ class _ResultsScreenState extends State<ResultsScreen>
   int correctCount = 0;
   int incorrectCount = 0;
   int unansweredCount = 0;
-
+  int pendingGradingCount = 0;
 
   @override
   void initState() {
@@ -112,12 +110,10 @@ class _ResultsScreenState extends State<ResultsScreen>
   Future<void> _loadExamResults() async {
     if (_disposed || !mounted) return;
 
-    // Try API first
     bool loadedFromAPI = await _loadExamResultsFromAPI();
     
     if (_disposed || !mounted) return;
 
-    // If API failed or returned no data, try cache
     if (!loadedFromAPI || (results.isEmpty && questions.isEmpty)) {
       if (kDebugMode) {
         debugPrint('⚠️ API load incomplete, trying local cache...');
@@ -162,7 +158,6 @@ class _ResultsScreenState extends State<ResultsScreen>
           debugPrint('   Response keys: ${apiResponse.keys.toList()}');
         }
         
-        // ✅ Extract attempt info (score, total marks, etc.)
         if (apiResponse['attempt'] != null) {
           attemptInfo = Map<String, dynamic>.from(apiResponse['attempt']);
           score = (attemptInfo!['score'] as num?)?.toInt();
@@ -176,53 +171,46 @@ class _ResultsScreenState extends State<ResultsScreen>
           }
         }
         
-        // ✅ Extract statistics (pre-calculated from backend)
         if (apiResponse['statistics'] != null) {
           statistics = Map<String, dynamic>.from(apiResponse['statistics']);
           
-          // 🩹 FIX: safely convert any double values to int
           correctCount = (statistics!['correctAnswers'] as num?)?.toInt() ?? 0;
           incorrectCount = (statistics!['incorrectAnswers'] as num?)?.toInt() ?? 0;
           unansweredCount = (statistics!['unanswered'] as num?)?.toInt() ?? 0;
+          pendingGradingCount = (statistics!['pendingGrading'] as num?)?.toInt() ?? 0;
 
           if (kDebugMode) {
             debugPrint('   📈 Statistics:');
             debugPrint('      Correct: $correctCount');
             debugPrint('      Incorrect: $incorrectCount');
             debugPrint('      Unanswered: $unansweredCount');
+            debugPrint('      Pending: $pendingGradingCount');
           }
         }
-
         
-        // ✅ CRITICAL: Extract results array (NEW API FORMAT)
         if (apiResponse['results'] != null && apiResponse['results'] is List) {
           results = List<Map<String, dynamic>>.from(apiResponse['results']);
           
           if (kDebugMode) {
             debugPrint('   ✅ Results array found: ${results.length} items');
-            debugPrint('   Sample result structure:');
             if (results.isNotEmpty) {
               final sample = results[0];
-              debugPrint('      Keys: ${sample.keys.toList()}');
-              debugPrint('      Has isCorrect: ${sample.containsKey('isCorrect')}');
-              debugPrint('      Has pointsAwarded: ${sample.containsKey('pointsAwarded')}');
-              debugPrint('      Has correctAnswer: ${sample.containsKey('correctAnswer')}');
-              debugPrint('      correctAnswer value: ${sample['correctAnswer']}');
+              debugPrint('   Sample result keys: ${sample.keys.toList()}');
             }
           }
           
-          // ✅ Also populate legacy structures for backward compatibility
           questions = results.map((r) => {
             'id': r['id'],
             'itemId': r['itemId'],
             'question': r['question'],
             'type': r['type'],
             'choices': r['choices'],
-            'correct': r['correctAnswer'], // May be null (hidden by backend)
+            'correct': r['correctAnswer'],
             'marks': r['maxPoints'],
             'isCorrect': r['isCorrect'],
             'pointsAwarded': r['pointsAwarded'],
             'maxPoints': r['maxPoints'],
+            'feedback': r['feedback'],
           }).toList();
           
           studentAnswers = Map.fromEntries(
@@ -237,9 +225,7 @@ class _ResultsScreenState extends State<ResultsScreen>
             debugPrint('      Questions: ${questions.length}');
             debugPrint('      Answers: ${studentAnswers.length}');
           }
-        }
-        // Fallback to legacy format if results array not available
-        else {
+        } else {
           if (kDebugMode) {
             debugPrint('   ⚠️ No results array, trying legacy format...');
           }
@@ -250,12 +236,6 @@ class _ResultsScreenState extends State<ResultsScreen>
           
           if (apiResponse['answers'] != null && apiResponse['answers'] is Map) {
             studentAnswers = Map<String, dynamic>.from(apiResponse['answers']);
-          }
-          
-          if (kDebugMode) {
-            debugPrint('   📊 Legacy format:');
-            debugPrint('      Questions: ${questions.length}');
-            debugPrint('      Answers: ${studentAnswers.length}');
           }
         }
         
@@ -301,14 +281,11 @@ class _ResultsScreenState extends State<ResultsScreen>
     try {
       if (kDebugMode) {
         debugPrint('💾 Loading results from cache...');
-        debugPrint('   Attempt ID: ${widget.attemptId}');
-        debugPrint('   Student ID: ${widget.studentId}');
       }
       
       final allKeys = examBox.keys.cast<String>().toList();
       String? matchingKey;
       
-      // Search all records for matching attemptId
       for (var key in allKeys) {
         final record = examBox.get(key);
         if (record is! Map) continue;
@@ -319,18 +296,11 @@ class _ResultsScreenState extends State<ResultsScreen>
         if (recordAttemptId == widget.attemptId && 
             record['studentId'] == widget.studentId) {
           matchingKey = key;
-          if (kDebugMode) {
-            debugPrint('   ✓ Found matching record: $key');
-          }
           break;
         }
       }
 
       if (matchingKey == null) {
-        if (kDebugMode) {
-          debugPrint('⚠️ No matching cached results found');
-        }
-        
         if (_disposed || !mounted) return;
         setState(() {
           loaded = true;
@@ -341,20 +311,14 @@ class _ResultsScreenState extends State<ResultsScreen>
       }
 
       final cachedRecord = Map<String, dynamic>.from(examBox.get(matchingKey));
-      
-      if (kDebugMode) {
-        debugPrint('✅ Using cached record from: $matchingKey');
-      }
 
       if (_disposed || !mounted) return;
 
       setState(() {
-        // Extract results array if available
         if (cachedRecord['results'] != null && cachedRecord['results'] is List) {
           results = List<Map<String, dynamic>>.from(cachedRecord['results']);
         }
         
-        // Extract legacy format
         final rawAnswers = cachedRecord['answers'] ?? 
                           cachedRecord['studentAnswers'] ?? {};
         studentAnswers = Map<String, dynamic>.from(rawAnswers);
@@ -364,7 +328,6 @@ class _ResultsScreenState extends State<ResultsScreen>
             .map((q) => Map<String, dynamic>.from(q))
             .toList();
         
-        // Extract score and stats
         score = cachedRecord['score'] ?? cachedRecord['attempt']?['score'];
         totalMarks = cachedRecord['totalMarks'] ?? 
                     cachedRecord['total_marks'] ??
@@ -372,20 +335,16 @@ class _ResultsScreenState extends State<ResultsScreen>
         
         if (cachedRecord['statistics'] != null) {
           statistics = Map<String, dynamic>.from(cachedRecord['statistics']);
+          correctCount = (statistics!['correctAnswers'] as num?)?.toInt() ?? 0;
+          incorrectCount = (statistics!['incorrectAnswers'] as num?)?.toInt() ?? 0;
+          unansweredCount = (statistics!['unanswered'] as num?)?.toInt() ?? 0;
+          pendingGradingCount = (statistics!['pendingGrading'] as num?)?.toInt() ?? 0;
         }
         
         flagged = cachedRecord['flagged'] ?? false;
         loaded = true;
         errorMessage = null;
       });
-      
-      if (kDebugMode) {
-        debugPrint('✅ Loaded from cache:');
-        debugPrint('   Results: ${results.length}');
-        debugPrint('   Questions: ${questions.length}');
-        debugPrint('   Answers: ${studentAnswers.length}');
-        debugPrint('   Score: $score${totalMarks != null ? " / $totalMarks" : ""}');
-      }
       
       if (mounted) {
         _showSnack("📱 Results loaded from offline cache");
@@ -406,9 +365,7 @@ class _ResultsScreenState extends State<ResultsScreen>
   void _checkAndPlayConfetti() {
     if (_disposed || !mounted || _confettiPlayed) return;
 
-    final correctCount = getCorrectCount();
-    final total = getTotalQuestions();
-    final scorePercent = total == 0 ? 0 : ((correctCount / total) * 100).round();
+    final scorePercent = getScorePercent();
 
     if (scorePercent >= 75) {
       _confettiPlayed = true;
@@ -435,7 +392,6 @@ class _ResultsScreenState extends State<ResultsScreen>
     });
   }
 
-  // ✅ Helper to get display text for answers (converts key to text)
   String getAnswerDisplayText(Map<String, dynamic> question, dynamic answerValue) {
     if (answerValue == null || answerValue.toString().isEmpty) {
       return "No answer provided";
@@ -443,7 +399,6 @@ class _ResultsScreenState extends State<ResultsScreen>
 
     final answerStr = answerValue.toString();
     
-    // For MCQ/True-False, convert key to text
     if ((question['type'] == 'mcq' || question['type'] == 'true_false') && 
         question['choices'] != null) {
       final choices = question['choices'] as List;
@@ -459,11 +414,9 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   int getTotalQuestions() {
-    // Always use actual data first
     if (results.isNotEmpty) return results.length;
     if (questions.isNotEmpty) return questions.length;
     
-    // Fallback to statistics - FIXED to handle double values
     if (statistics != null && statistics!['totalQuestions'] != null) {
       return (statistics!['totalQuestions'] as num?)?.toInt() ?? 0;
     }
@@ -472,12 +425,10 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   int getCorrectCount() {
-    // Prioritize backend statistics if available (more reliable)
     if (statistics != null && statistics!['correctAnswers'] != null) {
       return (statistics!['correctAnswers'] as num?)?.toInt() ?? 0;
     }
     
-    // Calculate from actual results data
     if (results.isNotEmpty) {
       return results.where((r) => r['isCorrect'] == true).length;
     }
@@ -494,19 +445,57 @@ class _ResultsScreenState extends State<ResultsScreen>
     return 0;
   }
 
+  int getPointsEarned() {
+    if (score != null) return score!;
+    
+    if (results.isNotEmpty) {
+      return results.fold<int>(0, (sum, r) {
+        final points = (r['pointsAwarded'] as num?)?.toInt() ?? 0;
+        return sum + points;
+      });
+    }
+    
+    return getCorrectCount();
+  }
+
+  int getTotalPossiblePoints() {
+    if (totalMarks != null) return totalMarks!;
+    
+    if (results.isNotEmpty) {
+      return results.fold<int>(0, (sum, r) {
+        final maxPoints = (r['maxPoints'] as num?)?.toInt() ?? 1;
+        return sum + maxPoints;
+      });
+    }
+    
+    if (questions.isNotEmpty) {
+      return questions.fold<int>(0, (sum, q) {
+        final marks = (q['marks'] as num?)?.toInt() ?? 1;
+        return sum + marks;
+      });
+    }
+    
+    return getTotalQuestions();
+  }
+
+  int getScorePercent() {
+    final pointsEarned = getPointsEarned();
+    final totalPoints = getTotalPossiblePoints();
+    
+    if (totalPoints == 0) return 0;
+    
+    return ((pointsEarned / totalPoints) * 100).round();
+  }
+
   int getIncorrectCount() {
-    // Prioritize backend statistics if available (more reliable)
     if (statistics != null && statistics!['incorrectAnswers'] != null) {
       return (statistics!['incorrectAnswers'] as num?)?.toInt() ?? 0;
     }
     
-    // Calculate from actual results data
-    // FIXED: Only count false, NOT null (null = pending grading)
     if (results.isNotEmpty) {
       return results.where((r) {
         final hasAnswer = r['studentAnswer'] != null && 
                          r['studentAnswer'].toString().isNotEmpty;
-        // Only count explicitly false answers, not null
         return hasAnswer && r['isCorrect'] == false;
       }).length;
     }
@@ -519,7 +508,6 @@ class _ResultsScreenState extends State<ResultsScreen>
         if (!hasAnswer) return false;
         
         if (q['isCorrect'] != null) {
-          // Only count explicitly false, not null
           return q['isCorrect'] == false;
         }
         
@@ -533,12 +521,10 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   int getUnansweredCount() {
-    // Prioritize backend statistics if available (more reliable)
     if (statistics != null && statistics!['unanswered'] != null) {
       return (statistics!['unanswered'] as num?)?.toInt() ?? 0;
     }
     
-    // Calculate from actual results data
     if (results.isNotEmpty) {
       return results.where((r) => 
         r['studentAnswer'] == null || r['studentAnswer'].toString().isEmpty
@@ -555,13 +541,15 @@ class _ResultsScreenState extends State<ResultsScreen>
     return 0;
   }
 
-  // NEW: Add method to get pending grading count (isCorrect: null)
   int getPendingGradingCount() {
+    if (statistics != null && statistics!['pendingGrading'] != null) {
+      return (statistics!['pendingGrading'] as num?)?.toInt() ?? 0;
+    }
+    
     if (results.isNotEmpty) {
       return results.where((r) {
         final hasAnswer = r['studentAnswer'] != null && 
                          r['studentAnswer'].toString().isNotEmpty;
-        // Count items that are answered but isCorrect is null
         return hasAnswer && r['isCorrect'] == null;
       }).length;
     }
@@ -578,20 +566,24 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   List<Map<String, dynamic>> getFilteredQuestions() {
-    // Use results array if available
     if (results.isNotEmpty) {
       switch (filter) {
         case FilterOption.correct:
           return results.where((r) => r['isCorrect'] == true).toList();
         case FilterOption.incorrect:
           return results.where((r) => r['isCorrect'] == false).toList();
+        case FilterOption.pending:
+          return results.where((r) {
+            final hasAnswer = r['studentAnswer'] != null && 
+                             r['studentAnswer'].toString().isNotEmpty;
+            return hasAnswer && r['isCorrect'] == null;
+          }).toList();
         case FilterOption.all:
         default:
           return results;
       }
     }
     
-    // Fallback to legacy questions
     switch (filter) {
       case FilterOption.correct:
         return questions.where((q) {
@@ -606,6 +598,12 @@ class _ResultsScreenState extends State<ResultsScreen>
           final correct = q['correct']?.toString().trim().toLowerCase();
           final answer = studentAnswers[q['id']]?.toString().trim().toLowerCase();
           return correct != null && correct != answer;
+        }).toList();
+      case FilterOption.pending:
+        return questions.where((q) {
+          final answer = studentAnswers[q['id']];
+          final hasAnswer = answer != null && answer.toString().isNotEmpty;
+          return hasAnswer && q['isCorrect'] == null;
         }).toList();
       case FilterOption.all:
       default:
@@ -699,14 +697,18 @@ class _ResultsScreenState extends State<ResultsScreen>
     final correctCount = getCorrectCount();
     final incorrectCount = getIncorrectCount();
     final unansweredCount = getUnansweredCount();
+    final pendingCount = getPendingGradingCount();
     final total = getTotalQuestions();
-    final scorePercent = total == 0 ? 0 : ((correctCount / total) * 100).round();
+    final scorePercent = getScorePercent();
+    final pointsEarned = getPointsEarned();
+    final totalPoints = getTotalPossiblePoints();
     final passed = scorePercent >= 75;
 
     final dataMap = {
       "Correct": correctCount.toDouble(),
       "Incorrect": incorrectCount.toDouble(),
       "Unanswered": unansweredCount.toDouble(),
+      if (pendingCount > 0) "Pending": pendingCount.toDouble(),
     };
 
     return Scaffold(
@@ -765,6 +767,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                           correctCount: correctCount,
                           incorrectCount: incorrectCount,
                           unansweredCount: unansweredCount,
+                          pendingCount: pendingCount,
                           total: total,
                           scorePercent: scorePercent,
                           passed: passed,
@@ -773,6 +776,8 @@ class _ResultsScreenState extends State<ResultsScreen>
                           filter: filter,
                           score: score,
                           totalMarks: totalMarks,
+                          pointsEarned: pointsEarned,
+                          totalPoints: totalPoints,
                           onFilterChanged: (f) {
                             if (!_disposed && mounted) {
                               setState(() => filter = f);
@@ -832,14 +837,15 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 }
 
-// ExamSummaryCard with score display
 class ExamSummaryCard extends StatelessWidget {
-  final int correctCount, incorrectCount, unansweredCount, total, scorePercent;
+  final int correctCount, incorrectCount, unansweredCount, pendingCount, total, scorePercent;
   final bool passed, flagged;
   final Map<String, double> dataMap;
   final FilterOption filter;
   final int? score;
   final int? totalMarks;
+  final int? pointsEarned;
+  final int? totalPoints;
   final ValueChanged<FilterOption> onFilterChanged;
 
   const ExamSummaryCard({
@@ -847,6 +853,7 @@ class ExamSummaryCard extends StatelessWidget {
     required this.correctCount,
     required this.incorrectCount,
     required this.unansweredCount,
+    required this.pendingCount,
     required this.total,
     required this.scorePercent,
     required this.passed,
@@ -855,6 +862,8 @@ class ExamSummaryCard extends StatelessWidget {
     required this.filter,
     this.score,
     this.totalMarks,
+    this.pointsEarned,
+    this.totalPoints,
     required this.onFilterChanged,
   });
 
@@ -883,19 +892,34 @@ class ExamSummaryCard extends StatelessWidget {
                 _ResultBadge(passed: passed, score: scorePercent),
               ],
             ),
-            if (score != null) ...[
-              const SizedBox(height: 10),
-              Center(
-                child: Text(
-                  'Score: $score${totalMarks != null ? " / $totalMarks" : ""}',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.indigo.shade700,
-                  ),
-                ),
+            
+            const SizedBox(height: 10),
+            Center(
+              child: Column(
+                children: [
+                  if (score != null && totalMarks != null)
+                    Text(
+                      'Score: $score / $totalMarks',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.indigo.shade700,
+                      ),
+                    ),
+                  if (pointsEarned != null && totalPoints != null && 
+                      (score != pointsEarned || totalMarks != totalPoints))
+                    Text(
+                      'Points: $pointsEarned / $totalPoints',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.indigo.shade500,
+                      ),
+                    ),
+                ],
               ),
-            ],
+            ),
+            
             if (flagged) ...[
               const SizedBox(height: 10),
               Container(
@@ -919,6 +943,8 @@ class ExamSummaryCard extends StatelessWidget {
                 _buildStat("Correct", correctCount, Colors.green),
                 _buildStat("Incorrect", incorrectCount, Colors.red),
                 _buildStat("Unanswered", unansweredCount, Colors.grey),
+                if (pendingCount > 0)
+                  _buildStat("Pending", pendingCount, Colors.orange),
               ],
             ),
             const SizedBox(height: 12),
@@ -930,7 +956,8 @@ class ExamSummaryCard extends StatelessWidget {
                 colorList: [
                   Colors.green.shade400,
                   Colors.red.shade400,
-                  Colors.grey.shade400
+                  Colors.grey.shade400,
+                  if (pendingCount > 0) Colors.orange.shade400,
                 ],
                 chartValuesOptions: const ChartValuesOptions(
                   showChartValuesInPercentage: true,
@@ -948,6 +975,11 @@ class ExamSummaryCard extends StatelessWidget {
                 children: FilterOption.values.map((option) {
                   final selected = filter == option;
                   final label = "${option.name[0].toUpperCase()}${option.name.substring(1)}";
+                  
+                  if (option == FilterOption.pending && pendingCount == 0) {
+                    return const SizedBox.shrink();
+                  }
+                  
                   return GestureDetector(
                     onTap: () => onFilterChanged(option),
                     child: AnimatedContainer(
@@ -985,7 +1017,7 @@ class ExamSummaryCard extends StatelessWidget {
   Widget _buildStat(String title, int value, Color color) {
     return Column(
       children: [
-        Text(title, style: const TextStyle(fontSize: 14)),
+        Text(title, style: const TextStyle(fontSize: 12)),
         const SizedBox(height: 4),
         Text(
           "$value",
@@ -1037,7 +1069,6 @@ class _ResultBadge extends StatelessWidget {
   }
 }
 
-// ✅ Updated QuestionList to handle both formats
 class QuestionList extends StatelessWidget {
   final List<Map<String, dynamic>> questions;
   final Map<String, dynamic> studentAnswers;
@@ -1068,22 +1099,21 @@ class QuestionList extends StatelessWidget {
       itemBuilder: (context, index) {
         final q = questions[index];
         
-        // ✅ Get data from results format or legacy format
         bool? isCorrect;
         dynamic studentAnswer;
         dynamic correctAnswer;
         int? pointsAwarded;
         int? maxPoints;
+        String? feedback;
         
-        if (useResultsFormat || q.containsKey('isCorrect')) {
-          // NEW API format with isCorrect and points
+        if (useResultsFormat || q.containsKey('feedback')) {
           isCorrect = q['isCorrect'];
           studentAnswer = q['studentAnswer'] ?? studentAnswers[q['id']];
-          correctAnswer = q['correctAnswer']; // May be null (hidden by backend)
-          pointsAwarded = q['pointsAwarded'];
-          maxPoints = q['maxPoints'];
+          correctAnswer = q['correctAnswer'];
+          pointsAwarded = (q['pointsAwarded'] as num?)?.toInt();
+          maxPoints = (q['maxPoints'] as num?)?.toInt();
+          feedback = q['feedback'];
         } else {
-          // Legacy format: manual checking
           final answer = studentAnswers[q['id']];
           final correct = q['correct'];
           isCorrect = correct != null &&
@@ -1091,38 +1121,58 @@ class QuestionList extends StatelessWidget {
               answer?.toString().trim().toLowerCase();
           studentAnswer = answer;
           correctAnswer = correct;
-          maxPoints = q['marks'];
+          maxPoints = (q['marks'] as num?)?.toInt();
         }
 
-        // Determine status color and icon
+        final questionType = q['type']?.toString().toLowerCase() ?? '';
+        final isEssay = questionType == 'essay';
+        
+        final hasAnswer = studentAnswer != null && studentAnswer.toString().isNotEmpty;
+
         Color statusColor;
         IconData statusIcon;
+        String statusText;
         
-        if (studentAnswer == null || studentAnswer.toString().isEmpty) {
-          statusColor = Colors.grey;
+        if (!hasAnswer) {
+          statusColor = Colors.grey.shade600;
           statusIcon = Icons.help_outline;
+          statusText = "Unanswered";
+        } else if (isEssay) {
+          if (pointsAwarded != null && feedback != null && feedback.isNotEmpty) {
+            statusColor = Colors.blue.shade700;
+            statusIcon = Icons.verified;
+            statusText = "AI Graded";
+          } else if (pointsAwarded != null) {
+            statusColor = Colors.green.shade600;
+            statusIcon = Icons.check_circle;
+            statusText = "Graded";
+          } else {
+            statusColor = Colors.orange.shade600;
+            statusIcon = Icons.pending;
+            statusText = "Pending Grading";
+          }
         } else if (isCorrect == true) {
           statusColor = Colors.green.shade600;
           statusIcon = Icons.check_circle;
+          statusText = "Correct";
         } else if (isCorrect == false) {
           statusColor = Colors.red.shade600;
           statusIcon = Icons.cancel;
+          statusText = "Incorrect";
         } else {
-          // Manually graded (essay) or null
           statusColor = Colors.orange.shade600;
           statusIcon = Icons.pending;
+          statusText = "Pending";
         }
 
-        // Get display text for answers
         final studentAnswerText = getAnswerDisplayText(q, studentAnswer);
         
-        // ✅ Handle hidden correct answers gracefully
-        String correctAnswerText;
-        if (correctAnswer == null || correctAnswer.toString().isEmpty) {
-          correctAnswerText = 'Not available';
-        } else {
+        String? correctAnswerText;
+        if (!isEssay && correctAnswer != null && correctAnswer.toString().isNotEmpty) {
           correctAnswerText = getAnswerDisplayText(q, correctAnswer);
         }
+
+        final hasFeedback = feedback != null && feedback.isNotEmpty;
 
         return Card(
           elevation: 2,
@@ -1149,20 +1199,79 @@ class QuestionList extends StatelessWidget {
                 const SizedBox(height: 4),
                 Row(
                   children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: statusColor.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        statusText,
+                        style: TextStyle(
+                          color: statusColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    if (pointsAwarded != null && maxPoints != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        "$pointsAwarded/$maxPoints pts",
+                        style: TextStyle(
+                          color: Colors.blue.shade700,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
                     Icon(
-                      isCorrect == true ? Icons.check : Icons.close,
-                      size: 16,
+                      isEssay ? Icons.article_outlined : Icons.edit_outlined,
+                      size: 14,
                       color: statusColor,
                     ),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        "Your answer: $studentAnswerText",
-                        style: TextStyle(color: statusColor, fontSize: 13),
+                        isEssay && studentAnswerText.length > 60
+                            ? "${studentAnswerText.substring(0, 60)}..."
+                            : studentAnswerText,
+                        style: TextStyle(
+                          color: statusColor,
+                          fontSize: 13,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
                 ),
+                if (isEssay && hasFeedback) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.auto_awesome,
+                        size: 14,
+                        color: Colors.blue.shade600,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        "AI Feedback available",
+                        style: TextStyle(
+                          color: Colors.blue.shade600,
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
             children: [
@@ -1171,36 +1280,82 @@ class QuestionList extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // ✅ Show correct answer (or "Not available")
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          Icons.check_circle,
-                          color: correctAnswer == null 
-                              ? Colors.grey.shade600 
-                              : Colors.green.shade700,
-                          size: 20,
+                    if (isEssay) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey.shade300),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            "Correct answer: $correctAnswerText",
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: correctAnswer == null 
-                                  ? Colors.grey.shade700 
-                                  : Colors.green.shade700,
-                              fontSize: 14,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.edit_note,
+                                  size: 18,
+                                  color: Colors.grey.shade700,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  "Your Essay Answer:",
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey.shade800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 200),
+                              child: SingleChildScrollView(
+                                child: Text(
+                                  studentAnswerText,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey.shade800,
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    
+                    if (!isEssay && correctAnswerText != null) ...[
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.check_circle,
+                            color: Colors.green.shade700,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              "Correct answer: $correctAnswerText",
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green.shade700,
+                                fontSize: 14,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     
-                    // ✅ Show points if available
-                    if (pointsAwarded != null && maxPoints != null) ...[
-                      const SizedBox(height: 8),
+                    if (pointsAwarded != null && maxPoints != null && !isEssay) ...[
                       Row(
                         children: [
                           Icon(
@@ -1219,32 +1374,93 @@ class QuestionList extends StatelessWidget {
                           ),
                         ],
                       ),
+                      const SizedBox(height: 8),
                     ],
                     
-                    // Show feedback if available (for essays)
-                    if (q.containsKey('feedback') && q['feedback'] != null) ...[
-                      const SizedBox(height: 8),
+                    if (isEssay && hasFeedback) ...[
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 250),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              Colors.blue.shade50,
+                              Colors.indigo.shade50,
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.blue.shade200,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.shade100,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Icon(
+                                      Icons.auto_awesome,
+                                      color: Colors.blue.shade700,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      "AI Feedback",
+                                      style: TextStyle(
+                                        color: Colors.blue.shade900,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                feedback!,
+                                style: TextStyle(
+                                  color: Colors.blue.shade900,
+                                  fontSize: 14,
+                                  height: 1.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ] else if (isEssay && pointsAwarded != null && !hasFeedback) ...[
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
+                          color: Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.blue.shade200),
+                          border: Border.all(color: Colors.grey.shade300),
                         ),
                         child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Icon(
-                              Icons.feedback,
-                              color: Colors.blue.shade700,
+                              Icons.info_outline,
                               size: 18,
+                              color: Colors.grey.shade600,
                             ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                q['feedback'],
+                                "Graded by instructor - No AI feedback provided",
                                 style: TextStyle(
-                                  color: Colors.blue.shade900,
+                                  color: Colors.grey.shade700,
                                   fontSize: 13,
                                   fontStyle: FontStyle.italic,
                                 ),
